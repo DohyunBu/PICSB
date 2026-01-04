@@ -39,6 +39,10 @@ class sb_muti_model(object):
         self.save=save
         self.decay = decay
         directory_name = 'model/'
+        
+        # self.alpha = nn.Parameter(torch.randn(1, requires_grad=True, device=self.device)/1000)
+        self.alpha = nn.Parameter(torch.tensor([1e-3], device=self.device, requires_grad=True, dtype=torch.float32))
+        
         os.makedirs(directory_name, exist_ok=True)
         self.path = directory_name
 
@@ -55,6 +59,8 @@ class sb_muti_model(object):
             
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
+        self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
+        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr/1000, momentum=0.5)
         
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
@@ -63,7 +69,6 @@ class sb_muti_model(object):
           
     def train(self, low_resol_coef, loss_plot=True):
 
-        optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
         self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[]}
         
         # fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
@@ -78,7 +83,8 @@ class sb_muti_model(object):
                 epoch_pde_loss_fore = 0
                 epoch_pde_loss_fore2 = 0
                 
-                optimizer_fore.zero_grad()
+                self.optimizer_fore.zero_grad()
+                self.alpha_optimizer.zero_grad()
                 for data_tuple in zip(*dataloader_list):
                     num_all=[]
                     for i in range(self.length):
@@ -113,8 +119,8 @@ class sb_muti_model(object):
                         # pde_fore3[:, 0, :, [-2]] = 1
                         # pde_fore3[:, 0, :, [-1]] = 1
                         # pde_fore = burgers_pde_mse_reweight(x_1_hat, coef=low_resol_coef, weight=pde_fore3)
-                        pde_fore = burgers_pde_mse(x_1_hat, coef=low_resol_coef)
-                        pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=low_resol_coef, mask=mask_1)
+                        pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
+                        pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
                         if n < self.N_train / 3 :    
                             loss = 0 * loss_fore + 1 * pde_fore + 0 * pde_fore2
                         else:
@@ -126,7 +132,8 @@ class sb_muti_model(object):
                         # torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1.0)
                         # torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=1.0)
                         loss.backward()
-                        optimizer_fore.step()
+                        self.optimizer_fore.step()
+                        self.alpha_optimizer.step()
                         # self.apply_ema_to_model(self.v_fore, fore_params)
                         
                 if n % 1 == 0:
@@ -145,7 +152,7 @@ class sb_muti_model(object):
                     
                 pbar.set_description('processed: %d' % (1 + n))
                 if True:
-                    pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'PDE_loss2':epoch_pde_loss_fore2.detach().cpu().numpy()})
+                    pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'PDE_loss2':epoch_pde_loss_fore2.detach().cpu().numpy(), 'Alpha':self.alpha.detach().cpu().numpy()})
                     pbar.update(1)
                 
         if self.save :

@@ -6,7 +6,7 @@ from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 plt.rcParams["figure.dpi"] = 120
 plt.rcParams["font.size"] = 10
-
+print('ㅎㅇ요')
 def load_burgers_npz(path: str):
     d = np.load(path, allow_pickle=True)
     out = {k: d[k] for k in d.files}

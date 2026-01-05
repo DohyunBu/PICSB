@@ -138,7 +138,7 @@ def plot_result(
     pde_map_gtb = burgers_pde_all_pixel(torch.tensor(gtB).unsqueeze(0).unsqueeze(0), low_resol_coef)[0][0].detach().cpu().numpy()
     pde_map_predict = burgers_pde_all_pixel(predict.unsqueeze(0).unsqueeze(0) , low_resol_coef)[0][0].detach().cpu().numpy()
     pde_map = np.abs(pde_map_predict - pde_map_gtb)
-    pde_map_predict_initial = burgers_pde_all_pixel(torch.tensor(dataB_predict_initial).unsqueeze(0).unsqueeze(0), estimated_coef)[0][0].detach().cpu().numpy()
+    pde_map_predict_initial = burgers_pde_all_pixel(torch.tensor(dataB_predict_initial).unsqueeze(0).unsqueeze(0), torch.exp(estimated_coef))[0][0].detach().cpu().numpy()
     
     finite_err = err_after[np.isfinite(err_after)]
     vmin_e = 0.0
@@ -196,7 +196,7 @@ def plot_result(
         dataB_predict_initial, origin="upper", extent=extent,
         aspect="equal", cmap=cmap, vmin=vmin_gt, vmax=vmax_gt
     )
-    axes[0, 3].set_title(f"Feasible?_{estimated_coef.detach().cpu().numpy()}", fontsize=10)
+    axes[0, 3].set_title(f"Feasible?_{np.exp(estimated_coef.detach().cpu().numpy())}", fontsize=10)
     
     im_err_after = axes[0, 4].imshow(
         err_after, origin="upper", extent=extent,

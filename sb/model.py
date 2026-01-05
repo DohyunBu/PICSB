@@ -116,7 +116,8 @@ class sb_muti_model(object):
                             pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
                             
-                            loss = 1 * loss_fore + 0 * pde_fore + 0 * pde_fore2
+                            # loss = 1 * loss_fore + 0 * pde_fore + 0 * pde_fore2
+                            loss = 1 * loss_fore
                         else:
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
@@ -133,10 +134,10 @@ class sb_muti_model(object):
                             diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
                             loss_fore = diff.sum() / (~(mask_1.bool())).sum()
                             
-                            x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
+                            # x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
                             
-                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
+                            pde_fore = burgers_pde_mse(x_1_hat.detach(), coef=alpha)
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat.detach(), coef=alpha, mask=mask_1)
                             
                             loss = 0 * loss_fore + 1 * pde_fore + 0 * pde_fore2
                         epoch_loss_fore = loss_fore

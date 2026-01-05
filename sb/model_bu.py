@@ -61,7 +61,7 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr/1000)
+        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr/1000, momentum=0.1)
         
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
@@ -116,11 +116,12 @@ class sb_muti_model(object):
                             pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
                             
-                            loss = loss_fore #+ 1 * pde_fore + 0 * pde_fore2
+                            loss = pde_fore
                         else:
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
-                            x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
+                            x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
+                            # x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
                             
                             
                             x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
@@ -164,6 +165,7 @@ class sb_muti_model(object):
                     list3 = self.finetuning_loss_history['Alpha']
                     x = range(len(list3))
                     plt.plot(x, list3, label='Alpha')
+                    plt.ylim(0.,1.)
                     plt.legend()
                     plt.show()
                     plt.close()

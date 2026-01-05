@@ -95,31 +95,28 @@ def fill_missing_with_linear_interp(data):
 
 def fill_missing_with_cubic_interp(data):
     data_filled = {k: copy.deepcopy(v) for k, v in data.items()}
-    U_obs = data_filled["U_obs"].copy()
-    x = np.asarray(data_filled["x"])
-    mask_all = np.asarray(data_filled["mask"])
+    U_obs = np.asarray(data_filled["U_obs"]).copy() 
+    x = np.asarray(data_filled["x"]).ravel()         
+    m = np.asarray(data_filled["mask"]).astype(bool)  
 
-    if mask_all.ndim == 1:
-        mask_per_sample = np.repeat(mask_all[None, :], U_obs.shape[0], axis=0)
-    else:
-        mask_per_sample = mask_all
+    B, C, Nt, Nx = U_obs.shape
 
     sort_idx = np.argsort(x)
     x_sorted = x[sort_idx]
 
-    for sample_idx in range(U_obs.shape[0]):
-        mask = mask_per_sample[sample_idx].astype(bool)
-
-        known_x = x[mask]
-        if known_x.size < 2:
-            continue
-        
-        ksort = np.argsort(known_x)
-        known_x_sorted = known_x[ksort]
-
-        Nt = U_obs.shape[2]
+    for sample_idx in range(B):
         for t_idx in range(Nt):
-            known_vals = U_obs[sample_idx, 0, t_idx, mask]
+            mask_x = m[t_idx].ravel()           
+            known_x = x[mask_x].ravel()
+            if known_x.size < 2:
+                continue
+
+            known_vals = U_obs[sample_idx, 0, t_idx, mask_x].ravel()
+            if known_vals.size != known_x.size:
+                raise ValueError("known_x and known_vals size mismatch")
+
+            ksort = np.argsort(known_x)         
+            known_x_sorted = known_x[ksort]
             known_vals_sorted = known_vals[ksort]
 
             ux, inv = np.unique(known_x_sorted, return_inverse=True)
@@ -139,8 +136,10 @@ def fill_missing_with_cubic_interp(data):
                 cs = CubicSpline(known_x_use, known_vals_use, bc_type="not-a-knot", extrapolate=True)
                 filled_sorted = cs(x_sorted)
             else:
-                f = interp1d(known_x_use, known_vals_use, kind="linear", fill_value="extrapolate", assume_sorted=True)
+                f = interp1d(known_x_use, known_vals_use, kind="linear",
+                             fill_value="extrapolate", assume_sorted=True)
                 filled_sorted = f(x_sorted)
+
             filled = np.empty_like(filled_sorted)
             filled[sort_idx] = filled_sorted
             U_obs[sample_idx, 0, t_idx, :] = filled

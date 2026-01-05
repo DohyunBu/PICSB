@@ -107,18 +107,23 @@ def solve_burgers_1d(
 
     return U.astype(np.float32)
 
-def make_sensor_mask(Nx: int, n_sensors: int = 5, rng: np.random.Generator | None = None) -> np.ndarray:
-    rng = np.random.default_rng() if rng is None else rng
-    idx = rng.choice(Nx, size=n_sensors, replace=False)
-    mask = np.zeros(Nx, dtype=bool)
-    mask[idx] = True
-    
+def make_sensor_mask(Nx: int, Nt: int, n_sensors: int = None, sparse_ratio: float = 0.1, rng: np.random.Generator | None = None) -> np.ndarray:
+    if n_sensors is not None:
+        x_idx = rng.choice(Nx, size=n_sensors, replace=False)
+        mask = np.zeros((Nt, Nx), dtype=bool)
+        mask[:, x_idx] = True
+    else:
+        n = int(round(Nt * Nx * sparse_ratio))
+        flat_idx = rng.choice(Nt * Nx, size=n, replace=False)
+        t_idx, x_idx = np.unravel_index(flat_idx, (Nt, Nx))
+        mask = np.zeros((Nt, Nx), dtype=bool)
+        mask[t_idx, x_idx] = True
+        
     return mask
 
 def apply_spatial_mask(U: np.ndarray, mask: np.ndarray, fill_value: float = np.nan) -> np.ndarray:
-    """U: (Nt, Nx) -> observed version with only masked x kept across all time."""
     U_obs = np.full_like(U, fill_value, dtype=np.float32)
-    U_obs[:, mask] = U[:, mask]
+    U_obs[mask] = U[mask]
     
     return U_obs
 
@@ -129,12 +134,12 @@ def generate_dataset(
     Nt: int = 128,
     T: float = 1.0,
     L: float = 1.0,
-    grf_N: int | None = None,
     grf_m: float = 0.0,
     grf_gamma: float = 2.0,
     grf_tau: float = 5.0,
     grf_sigma: float = 25.0,
     n_sensors: int = 5,
+    sprse_ratio: float = 0.1,
     seed: int = 0,
 ) -> dict[str, np.ndarray]:
 
@@ -147,13 +152,12 @@ def generate_dataset(
     U_obs  = np.zeros((n_samples, 1, Nt, Nx), dtype=np.float32)
     U0     = np.zeros((n_samples, 1, 1, Nx), dtype=np.float32)
 
-    if grf_N is None:
-        grf_N = Nx // 2
+    grf_N = Nx // 2
 
     if n_sensors:
-        mask = make_sensor_mask(Nx, n_sensors=n_sensors, rng=np.random.default_rng(seed+1))
+        mask = make_sensor_mask(Nx, Nt, n_sensors=n_sensors, rng=np.random.default_rng(seed+1))
     else:
-        mask = np.zeros((n_samples, Nx), dtype=bool)
+        mask = make_sensor_mask(Nx, Nt, sparse_ratio=sprse_ratio, rng=np.random.default_rng(seed+1))
 
     for i in tqdm(range(n_samples)):
         u0 = grf1_grid(
@@ -179,13 +183,7 @@ def generate_dataset(
         U_full[i, 0] = U
         U0[i, 0, 0]  = u0
 
-        if n_sensors:
-            U_obs_i = apply_spatial_mask(U, mask)
-        else:
-            msk = make_sensor_mask(Nx, n_sensors=n_sensors, rng=rng)
-            mask[i] = msk
-            U_obs_i = apply_spatial_mask(U, msk)
-
+        U_obs_i = apply_spatial_mask(U, mask)
         U_obs[i, 0] = U_obs_i
 
     return {
@@ -224,7 +222,7 @@ def generate_dataset_predict_initial(
     U0     = np.zeros((n_samples, 1, 1, Nx), dtype=np.float32)
 
     if n_sensors:
-        mask = make_sensor_mask(Nx, n_sensors=n_sensors, rng=np.random.default_rng(seed+1))
+        mask = make_sensor_mask(Nx, Nt, n_sensors=n_sensors, rng=np.random.default_rng(seed+1))
     else:
         mask = np.zeros((n_samples, Nx), dtype=bool)
 

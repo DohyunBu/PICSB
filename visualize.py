@@ -106,7 +106,7 @@ def plot_result(
     high_resol_coef=None,
     low_resol_coef=None,
     estimated_coef=None,
-    mask_1d=None,
+    mask_2d=None,
 ):
     
     after = (
@@ -160,12 +160,12 @@ def plot_result(
     vmin_predict_initial = 0.0
     vmax_predict_initial = np.percentile(finite_pde_predict_initial, 99) if finite_pde_predict_initial.size > 0 else 1.0 
     
-    if mask_1d is not None:
-        mask = np.asarray(mask_1d, dtype=bool).reshape(-1)
+    if mask_2d is not None:
+        mask = np.asarray(mask_2d, dtype=bool)
         err_after  = err_after.copy()
-        err_after[:,  ~mask] = np.nan
+        err_after[~mask] = np.nan
         pde_map  = pde_map.copy()
-        pde_map[:,  ~mask] = np.nan
+        pde_map[~mask] = np.nan
 
 
     

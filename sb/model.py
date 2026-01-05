@@ -24,7 +24,6 @@ class sb_muti_model(object):
         self.timepoints = timepoints
         self.N_train=N_train
         self.B=B
-        self.d=pi_list[0].shape[1]
         self.steps=steps
         self.eps_train=eps_train
         self.eps_test=eps_test
@@ -140,7 +139,7 @@ class sb_muti_model(object):
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat.detach(), coef=alpha, mask=mask_1)
                             
                             # loss = 1 * loss_fore + 1 * pde_fore + 0 * pde_fore2
-                            loss = 1 * pde_fore + (0.1 - self.alpha) ** 2
+                            loss = 1 * pde_fore
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
@@ -305,7 +304,7 @@ class sb_muti_model(object):
                 return x
             else:
                 if t_new < t_list_stage[-2]:
-                    z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                    z = torch.randn(B, drift.shape[1], device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
                     del_x_t = drift * self.delta_t + np.sqrt(self.eps_train) * z
                     
                 else:
@@ -339,7 +338,8 @@ class sb_muti_model(object):
             y = s_m(t, t_ceils_stage)
             drift = v_m(x_t, y)
             if t_new < t_list_stage[-2]:
-                z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                z = torch.randn(B, drift.shape[1], device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                print(z)
                 del_x_t = drift * self.delta_t + np.sqrt(eps_test) * z
                 
             else:

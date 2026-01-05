@@ -94,56 +94,30 @@ class sb_muti_model(object):
                         num_all.append(batch_i.shape[0])
                         
                     for stage_index in range(self.length-1):
-                        if n < 0 :
-                            x_0, mask_0 = self._split_batch(data_tuple[stage_index])
-                            x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
-                            x_1_fixed = (x_1 * mask_1).detach()
-                            
-                            x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
-                            
-                            x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
-                            x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
-                            
-                            x_fore = self.v_fore(x_t_fore,self.scale_m_fore(t_fore, 1))
-                            x_fore = x_fore.view(self.B, 1, 128, 128)
-                            
-                            target_fore = (x_1 - x_t_fore) / (t_ceil - t_fore).view(-1, 1, 1, 1)
-                            
-                            diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
-                            loss_fore = diff.sum() / (~(mask_1.bool())).sum()
-                            
-                            x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
-                            
-                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
-                            
-                            # loss = 1 * loss_fore + 0 * pde_fore + 0 * pde_fore2
-                            loss = 1 * loss_fore
-                        else:
-                            x_0, mask_0 = self._split_batch(data_tuple[stage_index])
-                            x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
-                            x_1_fixed = (x_1 * mask_1).detach()
-                            x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
-                            x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
-                            
-                            x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
-                            x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
-                            
-                            x_fore = self.v_fore(x_t_fore,self.scale_m_fore(t_fore, 1))
-                            x_fore = x_fore.view(self.B, 1, 128, 128)
-                            
-                            target_fore = (x_1 - x_t_fore) / (t_ceil - t_fore).view(-1, 1, 1, 1)
-                            
-                            diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
-                            loss_fore = diff.sum() / (~(mask_1.bool())).sum()
-                            
-                            x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
-                            
-                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
-                            
-                            # loss = 1 * loss_fore + 1 * pde_fore + 0 * pde_fore2
-                            loss = 1 * pde_fore
+                        x_0, mask_0 = self._split_batch(data_tuple[stage_index])
+                        x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
+                        x_1_fixed = (x_1 * mask_1).detach()
+                        x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
+                        x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
+                        
+                        x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
+                        x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
+                        
+                        x_fore = self.v_fore(x_t_fore,self.scale_m_fore(t_fore, 1))
+                        x_fore = x_fore.view(self.B, 1, 128, 128)
+                        
+                        target_fore = (x_1 - x_t_fore) / (t_ceil - t_fore).view(-1, 1, 1, 1)
+                        
+                        diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
+                        loss_fore = diff.sum() / (~(mask_1.bool())).sum()
+                        
+                        x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
+                        
+                        pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
+                        pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
+                        
+                        # loss = 1 * loss_fore + 1 * pde_fore + 0 * pde_fore2
+                        loss = 1 * pde_fore
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2

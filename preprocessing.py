@@ -3,6 +3,8 @@ import torch
 from sklearn.preprocessing import MinMaxScaler
 import copy
 from scipy.interpolate import CubicSpline, interp1d
+from scipy.interpolate import CloughTocher2DInterpolator
+
 
 def time_windows(U_tx: np.ndarray, win_T: int, stride: int, start_t: int = 0, end_t: int = None):
     Nt, Nx = U_tx.shape
@@ -146,3 +148,32 @@ def fill_missing_with_cubic_interp(data):
 
     data_filled["U_filled"] = U_obs.copy()
     return data_filled
+
+def fill_missing_2d_clough(data, fill_nearest=True):
+    U_obs = np.asarray(data["U_obs"]).copy()
+    x = np.asarray(data["x"]).ravel()
+    mask = np.asarray(data["mask"]).astype(bool)  # (Nt,Nx)
+    B, C, Nt, Nx = U_obs.shape
+
+    tt = np.arange(Nt)
+    T, X = np.meshgrid(tt, x, indexing="ij")
+
+    out = U_obs.copy()
+    for b in range(B):
+        pts = np.column_stack([T[mask], X[mask]])
+        vals = U_obs[b, 0][mask]
+
+        interp = CloughTocher2DInterpolator(pts, vals)
+        Ui = interp(T, X)  # hull 밖 NaN 가능
+
+        if fill_nearest and np.isnan(Ui).any():
+            from scipy.interpolate import NearestNDInterpolator
+            nn = NearestNDInterpolator(pts, vals)
+            nan = np.isnan(Ui)
+            Ui[nan] = nn(T[nan], X[nan])
+
+        out[b, 0] = Ui
+
+    data2 = dict(data)
+    data2["U_filled"] = out
+    return data2

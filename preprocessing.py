@@ -3,6 +3,8 @@ import torch
 from sklearn.preprocessing import MinMaxScaler
 import copy
 from scipy.interpolate import CubicSpline, interp1d
+from scipy.interpolate import CloughTocher2DInterpolator
+
 
 def time_windows(U_tx: np.ndarray, win_T: int, stride: int, start_t: int = 0, end_t: int = None):
     Nt, Nx = U_tx.shape
@@ -95,31 +97,28 @@ def fill_missing_with_linear_interp(data):
 
 def fill_missing_with_cubic_interp(data):
     data_filled = {k: copy.deepcopy(v) for k, v in data.items()}
-    U_obs = data_filled["U_obs"].copy()
-    x = np.asarray(data_filled["x"])
-    mask_all = np.asarray(data_filled["mask"])
+    U_obs = np.asarray(data_filled["U_obs"]).copy() 
+    x = np.asarray(data_filled["x"]).ravel()         
+    m = np.asarray(data_filled["mask"]).astype(bool)  
 
-    if mask_all.ndim == 1:
-        mask_per_sample = np.repeat(mask_all[None, :], U_obs.shape[0], axis=0)
-    else:
-        mask_per_sample = mask_all
+    B, C, Nt, Nx = U_obs.shape
 
     sort_idx = np.argsort(x)
     x_sorted = x[sort_idx]
 
-    for sample_idx in range(U_obs.shape[0]):
-        mask = mask_per_sample[sample_idx].astype(bool)
-
-        known_x = x[mask]
-        if known_x.size < 2:
-            continue
-        
-        ksort = np.argsort(known_x)
-        known_x_sorted = known_x[ksort]
-
-        Nt = U_obs.shape[2]
+    for sample_idx in range(B):
         for t_idx in range(Nt):
-            known_vals = U_obs[sample_idx, 0, t_idx, mask]
+            mask_x = m[t_idx].ravel()           
+            known_x = x[mask_x].ravel()
+            if known_x.size < 2:
+                continue
+
+            known_vals = U_obs[sample_idx, 0, t_idx, mask_x].ravel()
+            if known_vals.size != known_x.size:
+                raise ValueError("known_x and known_vals size mismatch")
+
+            ksort = np.argsort(known_x)         
+            known_x_sorted = known_x[ksort]
             known_vals_sorted = known_vals[ksort]
 
             ux, inv = np.unique(known_x_sorted, return_inverse=True)
@@ -139,11 +138,42 @@ def fill_missing_with_cubic_interp(data):
                 cs = CubicSpline(known_x_use, known_vals_use, bc_type="not-a-knot", extrapolate=True)
                 filled_sorted = cs(x_sorted)
             else:
-                f = interp1d(known_x_use, known_vals_use, kind="linear", fill_value="extrapolate", assume_sorted=True)
+                f = interp1d(known_x_use, known_vals_use, kind="linear",
+                             fill_value="extrapolate", assume_sorted=True)
                 filled_sorted = f(x_sorted)
+
             filled = np.empty_like(filled_sorted)
             filled[sort_idx] = filled_sorted
             U_obs[sample_idx, 0, t_idx, :] = filled
 
     data_filled["U_filled"] = U_obs.copy()
     return data_filled
+
+def fill_missing_2d_clough(data, fill_nearest=True):
+    U_obs = np.asarray(data["U_obs"]).copy()
+    x = np.asarray(data["x"]).ravel()
+    mask = np.asarray(data["mask"]).astype(bool)  # (Nt,Nx)
+    B, C, Nt, Nx = U_obs.shape
+
+    tt = np.arange(Nt)
+    T, X = np.meshgrid(tt, x, indexing="ij")
+
+    out = U_obs.copy()
+    for b in range(B):
+        pts = np.column_stack([T[mask], X[mask]])
+        vals = U_obs[b, 0][mask]
+
+        interp = CloughTocher2DInterpolator(pts, vals)
+        Ui = interp(T, X)  # hull 밖 NaN 가능
+
+        if fill_nearest and np.isnan(Ui).any():
+            from scipy.interpolate import NearestNDInterpolator
+            nn = NearestNDInterpolator(pts, vals)
+            nan = np.isnan(Ui)
+            Ui[nan] = nn(T[nan], X[nan])
+
+        out[b, 0] = Ui
+
+    data2 = dict(data)
+    data2["U_filled"] = out
+    return data2

@@ -24,7 +24,7 @@ class sb_muti_model(object):
         self.timepoints = timepoints
         self.N_train=N_train
         self.B=B
-        self.d=pi_list[0].shape[1]
+        self.d=pi_list[0].shape[0]
         self.steps=steps
         self.eps_train=eps_train
         self.eps_test=eps_test
@@ -112,8 +112,9 @@ class sb_muti_model(object):
                             
                             pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
+                            pde_pde = smooth(x_1_hat)
                             
-                            loss = pde_fore + 10*pde_fore2
+                            loss = loss_fore + pde_pde
                         else:
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
@@ -137,7 +138,7 @@ class sb_muti_model(object):
                             pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
                             
-                            loss = pde_fore + 10*pde_fore2
+                            loss = pde_fore
                             
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore

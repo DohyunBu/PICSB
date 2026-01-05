@@ -209,6 +209,7 @@ def generate_dataset_predict_initial(
     L: float = 1.0,
     predict: torch.tensor = None,
     n_sensors: int = 5,
+    sprse_ratio: float = 0.1,
     seed: int = 0,
 ) :
 
@@ -224,7 +225,7 @@ def generate_dataset_predict_initial(
     if n_sensors:
         mask = make_sensor_mask(Nx, Nt, n_sensors=n_sensors, rng=np.random.default_rng(seed+1))
     else:
-        mask = np.zeros((n_samples, Nx), dtype=bool)
+        mask = make_sensor_mask(Nx, Nt, sparse_ratio=sprse_ratio, rng=np.random.default_rng(seed+1))
 
     for i in tqdm(range(n_samples)):
         u0 = predict[0,:].detach().cpu().numpy()
@@ -241,13 +242,7 @@ def generate_dataset_predict_initial(
         U_full[i, 0] = U
         U0[i, 0, 0]  = u0
 
-        if n_sensors:
-            U_obs_i = apply_spatial_mask(U, mask)
-        else:
-            msk = make_sensor_mask(Nx, n_sensors=n_sensors, rng=rng)
-            mask[i] = msk
-            U_obs_i = apply_spatial_mask(U, msk)
-
+        U_obs_i = apply_spatial_mask(U, mask)
         U_obs[i, 0] = U_obs_i
 
     return {

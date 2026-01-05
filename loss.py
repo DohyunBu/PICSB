@@ -3,18 +3,6 @@ import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 
-def smooth(u):
-    device = u.device
-    dtype = u.dtype
-    dx = 1/128
-    dt = 1/128
-    deriv_t = torch.tensor([[-1/2],[1],[-1/2]], device=device, dtype=dtype).view(1,1,3,1) / (2 * dt)
-    deriv_x = torch.tensor([[-1/2,1,-1/2]],     device=device, dtype=dtype).view(1,1,1,3) / (2 * dx)
-    u_t  = F.conv2d(u,  deriv_t, padding=(1,0))
-    u_x  = F.conv2d(u,  deriv_x, padding=(0,1))
-    r = (u_t.abs()**2 + u_x.abs()**2)[:, 0, 1:-1, 1:-1].mean()
-    return r
-
 def burgers_pde_mse(u, coef):
     device = u.device
     dtype  = u.dtype

@@ -40,10 +40,9 @@ class sb_muti_model(object):
         self.save=save
         self.decay = decay
         directory_name = 'model/'
-        
-        # self.alpha = nn.Parameter(torch.randn(1, requires_grad=True, device=self.device)/1000)
-        self.alpha = nn.Parameter(torch.tensor([1e-3], device=self.device, requires_grad=True, dtype=torch.float32))
-        
+        log_alpha_init = torch.empty(1).uniform_(np.log(1e-4), np.log(1e-2))
+        self.alpha = nn.Parameter(log_alpha_init.to(self.device))
+        # self.alpha = nn.Parameter(torch.tensor(np.log(1e-3), dtype=torch.float32))
         os.makedirs(directory_name, exist_ok=True)
         self.path = directory_name
 
@@ -61,20 +60,20 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr/1000, momentum=0.1)
+        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr*10)
         
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
             return batch[0].to(self.device, dtype=torch.float32), batch[1].to(self.device, dtype=torch.float32)
         return batch.to(self.device, dtype=torch.float32), None
           
-    def train(self, low_resol_coef, loss_plot=True):
+    def train(self, loss_plot=True):
 
         self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Alpha":[]}
         
-        # fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
-        # for param in fore_params.values():
-        #     param.requires_grad = False  
+        fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
+        for param in fore_params.values():
+            param.requires_grad = False  
             
         with tqdm(total=self.N_train) as pbar:
             for n in range(self.N_train):
@@ -87,6 +86,7 @@ class sb_muti_model(object):
                 self.optimizer_fore.zero_grad()
                 self.alpha_optimizer.zero_grad()
                 for data_tuple in zip(*dataloader_list):
+                    alpha = torch.exp(self.alpha)
                     num_all=[]
                     for i in range(self.length):
                         batch_i = data_tuple[i][0] if isinstance(data_tuple[i], (list, tuple)) else data_tuple[i]
@@ -113,15 +113,14 @@ class sb_muti_model(object):
                             
                             x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
                             
-                            pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
+                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
                             
-                            loss = 0 * loss_fore + 1 * pde_fore + 0 * pde_fore2
+                            loss = 1 * loss_fore + 0 * pde_fore + 0 * pde_fore2
                         else:
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
                             x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
-                            
                             
                             x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
                             x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
@@ -136,25 +135,25 @@ class sb_muti_model(object):
                             
                             x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
                             
-                            pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
+                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
                             
                             loss = 0 * loss_fore + 1 * pde_fore + 0 * pde_fore2
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
-                        # torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1.0)
-                        # torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=1.0)
+                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1.0)
+                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=1.0)
                         loss.backward()
                         self.optimizer_fore.step()
                         self.alpha_optimizer.step()
-                        # self.apply_ema_to_model(self.v_fore, fore_params)
+                        self.apply_ema_to_model(self.v_fore, fore_params)
                         
                 if n % 1 == 0:
                     with torch.no_grad():
                         self.finetuning_loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
                         self.finetuning_loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
-                        self.finetuning_loss_history['Alpha'].append(self.alpha.item())
+                        self.finetuning_loss_history['Alpha'].append(alpha.item())
                         
                 if self.save and n%100==0 and n!=0:
                     models_dict = {
@@ -172,7 +171,7 @@ class sb_muti_model(object):
                     
                 pbar.set_description('processed: %d' % (1 + n))
                 if True:
-                    pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'PDE_loss2':epoch_pde_loss_fore2.detach().cpu().numpy(), 'Alpha':self.alpha.detach().cpu().numpy()})
+                    pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'PDE_loss2':epoch_pde_loss_fore2.detach().cpu().numpy(), 'Alpha':alpha.detach().cpu().numpy()})
                     pbar.update(1)
                 
         if self.save :

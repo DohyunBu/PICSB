@@ -61,7 +61,7 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.Adam([self.alpha], lr=self.base_lr)
+        self.alpha_optimizer = optim.Adam([self.alpha], lr=self.base_lr*100)
         
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
@@ -72,9 +72,6 @@ class sb_muti_model(object):
 
         self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Alpha":[]}
         
-        # fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
-        # for param in fore_params.values():
-        #     param.requires_grad = False  
             
         with tqdm(total=self.N_train) as pbar:
             for n in range(self.N_train):
@@ -116,7 +113,7 @@ class sb_muti_model(object):
                             pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
                             
-                            loss = pde_fore
+                            loss = pde_fore + 10*pde_fore2
                         else:
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
@@ -140,7 +137,7 @@ class sb_muti_model(object):
                             pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
                             
-                            loss = pde_fore
+                            loss = pde_fore + 10*pde_fore2
                             
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
@@ -291,7 +288,7 @@ class sb_muti_model(object):
             else:
                 if t_new < t_list_stage[-2]:
                     z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
-                    del_x_t = drift * self.delta_t + np.sqrt(self.eps_train) * z
+                    del_x_t = drift * self.delta_t #+ np.sqrt(self.eps_train) * z
                     
                 else:
                     del_x_t = drift * self.delta_t

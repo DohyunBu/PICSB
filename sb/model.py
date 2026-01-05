@@ -24,7 +24,6 @@ class sb_muti_model(object):
         self.timepoints = timepoints
         self.N_train=N_train
         self.B=B
-        self.d=pi_list[0].shape[1]
         self.steps=steps
         self.eps_train=eps_train
         self.eps_test=eps_test
@@ -71,9 +70,9 @@ class sb_muti_model(object):
 
         self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Alpha":[]}
         
-        fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
-        for param in fore_params.values():
-            param.requires_grad = False  
+        # fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
+        # for param in fore_params.values():
+        #     param.requires_grad = False  
             
         with tqdm(total=self.N_train) as pbar:
             for n in range(self.N_train):
@@ -139,16 +138,17 @@ class sb_muti_model(object):
                             pde_fore = burgers_pde_mse(x_1_hat.detach(), coef=alpha)
                             pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat.detach(), coef=alpha, mask=mask_1)
                             
-                            loss = 0 * loss_fore + 1 * pde_fore + 0 * pde_fore2
+                            # loss = 1 * loss_fore + 1 * pde_fore + 0 * pde_fore2
+                            loss = 1 * pde_fore
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
-                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1.0)
-                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=1.0)
+                        # torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1.0)
+                        # torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=1.0)
                         loss.backward()
                         self.optimizer_fore.step()
                         self.alpha_optimizer.step()
-                        self.apply_ema_to_model(self.v_fore, fore_params)
+                        # self.apply_ema_to_model(self.v_fore, fore_params)
                         
                 if n % 1 == 0:
                     with torch.no_grad():
@@ -163,6 +163,20 @@ class sb_muti_model(object):
                         }
                     torch.cuda.empty_cache()
                     clear_output(wait=True)
+                    list1 = self.finetuning_loss_history['loss_fore']
+                    x = range(len(list1))
+                    plt.plot(x, list1, label='loss_fore')
+                    plt.legend()
+                    plt.show()
+                    plt.close()
+                    
+                    list2 = self.finetuning_loss_history['PDE_loss_fore']
+                    x = range(len(list2))
+                    plt.plot(x, list2, label='PDE_loss_fore')
+                    plt.legend()
+                    plt.show()
+                    plt.close()
+                    
                     list3 = self.finetuning_loss_history['Alpha']
                     x = range(len(list3))
                     plt.plot(x, list3, label='Alpha')
@@ -290,7 +304,7 @@ class sb_muti_model(object):
                 return x
             else:
                 if t_new < t_list_stage[-2]:
-                    z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                    z = torch.randn(B, drift.shape[1], device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
                     del_x_t = drift * self.delta_t + np.sqrt(self.eps_train) * z
                     
                 else:
@@ -324,7 +338,8 @@ class sb_muti_model(object):
             y = s_m(t, t_ceils_stage)
             drift = v_m(x_t, y)
             if t_new < t_list_stage[-2]:
-                z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                z = torch.randn(B, drift.shape[1], device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                print(z)
                 del_x_t = drift * self.delta_t + np.sqrt(eps_test) * z
                 
             else:

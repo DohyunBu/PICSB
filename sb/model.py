@@ -59,8 +59,8 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr*10)
-        
+        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr, momentum=0.5)
+
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
             return batch[0].to(self.device, dtype=torch.float32), batch[1].to(self.device, dtype=torch.float32)
@@ -84,15 +84,17 @@ class sb_muti_model(object):
                 
                 self.optimizer_fore.zero_grad()
                 self.alpha_optimizer.zero_grad()
+                
                 for data_tuple in zip(*dataloader_list):
-                    alpha = torch.exp(self.alpha)
+                    # alpha = torch.exp(self.alpha)
+                    alpha = F.softplus(self.alpha)
                     num_all=[]
                     for i in range(self.length):
                         batch_i = data_tuple[i][0] if isinstance(data_tuple[i], (list, tuple)) else data_tuple[i]
                         num_all.append(batch_i.shape[0])
                         
                     for stage_index in range(self.length-1):
-                        if n < self.N_train / 3 :
+                        if n < 500 :
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
                             x_1_fixed = (x_1 * mask_1).detach()
@@ -133,21 +135,23 @@ class sb_muti_model(object):
                             diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
                             loss_fore = diff.sum() / (~(mask_1.bool())).sum()
                             
-                            # x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
+                            x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
                             
-                            pde_fore = burgers_pde_mse(x_1_hat.detach(), coef=alpha)
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat.detach(), coef=alpha, mask=mask_1)
+                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
                             
                             # loss = 1 * loss_fore + 1 * pde_fore + 0 * pde_fore2
                             loss = 1 * pde_fore
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
-                        # torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1.0)
-                        # torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=1.0)
+                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=0.3)
+                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=0.3)
+                        torch.nn.utils.clip_grad_norm_(self.alpha, max_norm=0.1)
                         loss.backward()
                         self.optimizer_fore.step()
                         self.alpha_optimizer.step()
+                        
                         # self.apply_ema_to_model(self.v_fore, fore_params)
                         
                 if n % 1 == 0:
@@ -339,7 +343,6 @@ class sb_muti_model(object):
             drift = v_m(x_t, y)
             if t_new < t_list_stage[-2]:
                 z = torch.randn(B, drift.shape[1], device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
-                print(z)
                 del_x_t = drift * self.delta_t + np.sqrt(eps_test) * z
                 
             else:

@@ -9,7 +9,7 @@ def burgers_pde_mse(u, coef):
     dx = 1/128
     dt = 1/128
     deriv_t = torch.tensor([[-1],[0],[1]], device=device, dtype=dtype).view(1,1,3,1) / (2 * dt)
-    deriv_x = torch.tensor([[-1,1,0]],     device=device, dtype=dtype).view(1,1,1,3) / (1 * dx)
+    deriv_x = torch.tensor([[-1,0,1]],     device=device, dtype=dtype).view(1,1,1,3) / (2 * dx)
     deriv_xx = torch.tensor([[1,-2,1]],     device=device, dtype=dtype).view(1,1,1,3) / (dx * dx)
     
     u_t  = F.conv2d(u,  deriv_t, padding=(1,0))
@@ -27,7 +27,7 @@ def burgers_pde_mse_observed_pixel(u, coef, mask):
     dx = 1/128
     dt = 1/128
     deriv_t = torch.tensor([[-1],[0],[1]], device=device, dtype=dtype).view(1,1,3,1) / (2 * dt)
-    deriv_x = torch.tensor([[-1,1,0]],     device=device, dtype=dtype).view(1,1,1,3) / (1 * dx)
+    deriv_x = torch.tensor([[-1,0,1]],     device=device, dtype=dtype).view(1,1,1,3) / (2 * dx)
     deriv_xx = torch.tensor([[1,-2,1]],     device=device, dtype=dtype).view(1,1,1,3) / (dx * dx)
     u_t  = F.conv2d(u,  deriv_t, padding=(1,0))
     u_x  = F.conv2d(u,  deriv_x, padding=(0,1))
@@ -45,7 +45,7 @@ def burgers_pde_all_pixel(u, coef):
     dt = 1/128
 
     deriv_t = torch.tensor([[-1],[0],[1]], device=device, dtype=dtype).view(1,1,3,1) / (2 * dt)
-    deriv_x = torch.tensor([[-1,1,0]],     device=device, dtype=dtype).view(1,1,1,3) / (1 * dx)
+    deriv_x = torch.tensor([[-1,0,1]],     device=device, dtype=dtype).view(1,1,1,3) / (2 * dx)
     deriv_xx = torch.tensor([[1,-2,1]],     device=device, dtype=dtype).view(1,1,1,3) / (dx * dx)
     u_t  = F.conv2d(u,  deriv_t, padding=(1,0)) 
     u_x  = F.conv2d(u,  deriv_x, padding=(0,1))   

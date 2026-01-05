@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from sklearn.preprocessing import MinMaxScaler
 import copy
+from scipy.interpolate import CubicSpline, interp1d
 
 def time_windows(U_tx: np.ndarray, win_T: int, stride: int, start_t: int = 0, end_t: int = None):
     Nt, Nx = U_tx.shape
@@ -90,4 +91,59 @@ def fill_missing_with_linear_interp(data):
 
     data_filled["U_filled"] = U_obs.copy()
     
+    return data_filled
+
+def fill_missing_with_cubic_interp(data):
+    data_filled = {k: copy.deepcopy(v) for k, v in data.items()}
+    U_obs = data_filled["U_obs"].copy()
+    x = np.asarray(data_filled["x"])
+    mask_all = np.asarray(data_filled["mask"])
+
+    if mask_all.ndim == 1:
+        mask_per_sample = np.repeat(mask_all[None, :], U_obs.shape[0], axis=0)
+    else:
+        mask_per_sample = mask_all
+
+    sort_idx = np.argsort(x)
+    x_sorted = x[sort_idx]
+
+    for sample_idx in range(U_obs.shape[0]):
+        mask = mask_per_sample[sample_idx].astype(bool)
+
+        known_x = x[mask]
+        if known_x.size < 2:
+            continue
+        
+        ksort = np.argsort(known_x)
+        known_x_sorted = known_x[ksort]
+
+        Nt = U_obs.shape[2]
+        for t_idx in range(Nt):
+            known_vals = U_obs[sample_idx, 0, t_idx, mask]
+            known_vals_sorted = known_vals[ksort]
+
+            ux, inv = np.unique(known_x_sorted, return_inverse=True)
+            if ux.size != known_x_sorted.size:
+                tmp = np.zeros_like(ux, dtype=float)
+                cnt = np.zeros_like(ux, dtype=float)
+                for j, g in enumerate(inv):
+                    tmp[g] += known_vals_sorted[j]
+                    cnt[g] += 1
+                known_x_use = ux
+                known_vals_use = tmp / np.maximum(cnt, 1.0)
+            else:
+                known_x_use = known_x_sorted
+                known_vals_use = known_vals_sorted
+
+            if known_x_use.size >= 4:
+                cs = CubicSpline(known_x_use, known_vals_use, bc_type="not-a-knot", extrapolate=True)
+                filled_sorted = cs(x_sorted)
+            else:
+                f = interp1d(known_x_use, known_vals_use, kind="linear", fill_value="extrapolate", assume_sorted=True)
+                filled_sorted = f(x_sorted)
+            filled = np.empty_like(filled_sorted)
+            filled[sort_idx] = filled_sorted
+            U_obs[sample_idx, 0, t_idx, :] = filled
+
+    data_filled["U_filled"] = U_obs.copy()
     return data_filled

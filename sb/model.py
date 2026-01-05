@@ -290,7 +290,7 @@ class sb_muti_model(object):
                 return x
             else:
                 if t_new < t_list_stage[-2]:
-                    z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**2)
+                    z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
                     del_x_t = drift * self.delta_t + np.sqrt(self.eps_train) * z
                     
                 else:
@@ -324,7 +324,7 @@ class sb_muti_model(object):
             y = s_m(t, t_ceils_stage)
             drift = v_m(x_t, y)
             if t_new < t_list_stage[-2]:
-                z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**2)
+                z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
                 del_x_t = drift * self.delta_t + np.sqrt(eps_test) * z
                 
             else:

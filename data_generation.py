@@ -331,7 +331,71 @@ def generate_dataset(
         ),
     }
 
+def generate_dataset_predict_initial(
+    n_samples: int,
+    nu: float = 0.01,
+    Nx: int = 128,
+    Nt: int = 128,
+    T: float = 1.0,
+    L: float = 1.0,
+    predict: torch.tensor = None,
+    n_sensors: int = 5,
+    fixed_sensors: bool = False,
+    seed: int = 0,
+) :
 
+    rng = np.random.default_rng(seed)
+
+    x = np.linspace(0.0, L, Nx, endpoint=False).astype(np.float32)
+    t = np.linspace(0.0, T, Nt).astype(np.float32)
+
+    # 🔑 이미지 텐서로 바로 생성
+    U_full = np.zeros((n_samples, 1, Nt, Nx), dtype=np.float32)
+    U_obs  = np.zeros((n_samples, 1, Nt, Nx), dtype=np.float32)
+    U0     = np.zeros((n_samples, 1, 1, Nx), dtype=np.float32)
+
+    if fixed_sensors:
+        mask = make_sensor_mask(Nx, n_sensors=n_sensors, rng=np.random.default_rng(seed+1))
+    else:
+        mask = np.zeros((n_samples, Nx), dtype=bool)
+
+    for i in tqdm(range(n_samples)):
+        # ---- Initial condition (1D field)
+        u0 = predict[0,:].detach().cpu().numpy()
+        # ---- Burgers solve → (Nt, Nx)
+        U = solve_burgers_1d(
+            u0=u0,
+            nu=nu,
+            Nx=Nx,
+            Nt=Nt,
+            T=T,
+            L=L,
+            dealias=True,
+        )
+
+        # ---- Store as images
+        U_full[i, 0] = U
+        U0[i, 0, 0]  = u0
+
+        if fixed_sensors:
+            U_obs_i = apply_spatial_mask(U, mask)
+        else:
+            msk = make_sensor_mask(Nx, n_sensors=n_sensors, rng=rng)
+            mask[i] = msk
+            U_obs_i = apply_spatial_mask(U, msk)
+
+        # NaN 유지 (or 여기서 0으로 바꿔도 됨)
+        U_obs[i, 0] = U_obs_i
+
+    return {
+        "x": x,
+        "t": t,
+        "nu": np.asarray(nu, dtype=np.float32),
+        "U_full": U_full,   # (N, 1, Nt, Nx)
+        "U_obs": U_obs,     # (N, 1, Nt, Nx)
+        "u0": U0,           # (N, 1, 1, Nx)
+        "mask": mask,
+    }
 
 def save_npz(out_path: str, data: dict[str, np.ndarray]):
     np.savez_compressed(out_path, **data)

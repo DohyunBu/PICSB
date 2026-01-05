@@ -20,24 +20,6 @@ def burgers_pde_mse(u, coef):
     r = (u_t + u * u_x - coef * u_xx)[:, 0, 1:-1, 1:-1]  
     return ((r).abs()**2).mean()
 
-def burgers_pde_mse_reweight(u, coef, weight):
-    device = u.device
-    dtype  = u.dtype
-    dx = 1/128
-    dt = 1/128
-    deriv_t = torch.tensor([[-1],[0],[1]], device=device, dtype=dtype).view(1,1,3,1) / (2 * dt)
-    deriv_x = torch.tensor([[-1,1,0]],     device=device, dtype=dtype).view(1,1,1,3) / (1 * dx)
-    deriv_xx = torch.tensor([[1,-2,1]],     device=device, dtype=dtype).view(1,1,1,3) / (dx * dx)
-    u_t  = F.conv2d(u,  deriv_t, padding=(1,0))
-    u_x  = F.conv2d(u,  deriv_x, padding=(0,1))
-    u_xx = F.conv2d(u, deriv_xx, padding=(0,1))
-
-    # coef = torch.as_tensor(coef, device=device, dtype=dtype)
-    r = (u_t + u * u_x - coef * u_xx)
-    r = r * weight
-    r = r[:, 0, 1:-1, 1:-1]  
-    return (r).abs().mean()
-
 def burgers_pde_mse_observed_pixel(u, coef, mask):
     device = u.device
     dtype  = u.dtype

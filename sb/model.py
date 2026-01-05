@@ -9,6 +9,7 @@ import sb.networks
 import os
 from visualize import *
 from loss import *
+from IPython.display import clear_output
 
 class sb_muti_model(object):
     def __init__(self,pi_list,timepoints,N_train=1000,B=128,steps=60,eps_train=10,eps_test=10,base_lr=1e-3,pic_min=-1,pic_max=1,patience=1e8,lambda_=1e-3,clamp=False,save=False,mask_list=None, decay=0.8):
@@ -60,7 +61,7 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr/1000, momentum=0.5)
+        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr/1000, momentum=0.1)
         
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
@@ -69,7 +70,7 @@ class sb_muti_model(object):
           
     def train(self, low_resol_coef, loss_plot=True):
 
-        self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[]}
+        self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Alpha":[]}
         
         # fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
         # for param in fore_params.values():
@@ -78,7 +79,7 @@ class sb_muti_model(object):
         with tqdm(total=self.N_train) as pbar:
             for n in range(self.N_train):
                 dataloader_list=[DataLoader(self.pi[i],shuffle=False,batch_size=self.B,drop_last=True) for i in range(self.length)]
-                epoch_loss = 0
+                
                 epoch_loss_fore = 0
                 epoch_pde_loss_fore = 0
                 epoch_pde_loss_fore2 = 0
@@ -92,40 +93,53 @@ class sb_muti_model(object):
                         num_all.append(batch_i.shape[0])
                         
                     for stage_index in range(self.length-1):
-                        
-                        x_0, mask_0 = self._split_batch(data_tuple[stage_index])
-                        x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
-                        x_1_fixed = (x_1 * mask_1).detach()
-                        
-                        x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
-                        x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
-                        x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
-                        
-                        x_fore = self.v_fore(x_t_fore,self.scale_m_fore(t_fore, 1))
-                        x_fore = x_fore.view(self.B, 1, 128, 128)
-                        
-                        target_fore = (x_1 - x_t_fore) / (t_ceil - t_fore).view(-1, 1, 1, 1)
-                        
-                        diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
-                        loss_fore = diff.sum() / (~(mask_1.bool())).sum()
-                        
-                        x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1))[-1].cuda()
-                        
-                        # pde_fore3 = burgers_pde_all_pixel(x_1_hat, coef=low_resol_coef)
-                        # pde_fore3[:, 0, [0], :] = 1
-                        # pde_fore3[:, 0, [-1], :] = 1
-                        # pde_fore3[:, 0, :, [0]] = 1
-                        # pde_fore3[:, 0, :, [1]] = 1
-                        # pde_fore3[:, 0, :, [-2]] = 1
-                        # pde_fore3[:, 0, :, [-1]] = 1
-                        # pde_fore = burgers_pde_mse_reweight(x_1_hat, coef=low_resol_coef, weight=pde_fore3)
-                        pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
-                        pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
-                        if n < self.N_train / 3 :    
+                        if n < self.N_train / 3 :
+                            x_0, mask_0 = self._split_batch(data_tuple[stage_index])
+                            x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
+                            x_1_fixed = (x_1 * mask_1).detach()
+                            
+                            x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
+                            
+                            x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
+                            x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
+                            
+                            x_fore = self.v_fore(x_t_fore,self.scale_m_fore(t_fore, 1))
+                            x_fore = x_fore.view(self.B, 1, 128, 128)
+                            
+                            target_fore = (x_1 - x_t_fore) / (t_ceil - t_fore).view(-1, 1, 1, 1)
+                            
+                            diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
+                            loss_fore = diff.sum() / (~(mask_1.bool())).sum()
+                            
+                            x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
+                            
+                            pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
+                            
                             loss = 0 * loss_fore + 1 * pde_fore + 0 * pde_fore2
                         else:
+                            x_0, mask_0 = self._split_batch(data_tuple[stage_index])
+                            x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
+                            x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
+                            
+                            
+                            x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
+                            x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
+                            
+                            x_fore = self.v_fore(x_t_fore,self.scale_m_fore(t_fore, 1))
+                            x_fore = x_fore.view(self.B, 1, 128, 128)
+                            
+                            target_fore = (x_1 - x_t_fore) / (t_ceil - t_fore).view(-1, 1, 1, 1)
+                            
+                            diff = (x_fore - target_fore).abs() * (~(mask_1.bool()))
+                            loss_fore = diff.sum() / (~(mask_1.bool())).sum()
+                            
+                            x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
+                            
+                            pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
+                            
                             loss = 0 * loss_fore + 1 * pde_fore + 0 * pde_fore2
-                        epoch_loss += loss
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
@@ -138,17 +152,23 @@ class sb_muti_model(object):
                         
                 if n % 1 == 0:
                     with torch.no_grad():
-                        self.finetuning_loss_history['loss'].append(epoch_loss.item())
-                        if True:
-                            self.finetuning_loss_history['loss_fore'].append(epoch_loss_fore.item())
-                            self.finetuning_loss_history['PDE_loss_fore'].append(epoch_pde_loss_fore.item())
+                        self.finetuning_loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
+                        self.finetuning_loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
+                        self.finetuning_loss_history['Alpha'].append(self.alpha.item())
                         
-                if self.save and n%2==0 and n!=0:
+                if self.save and n%100==0 and n!=0:
                     models_dict = {
                         'v_fore': self.v_fore.state_dict(),
                         'scale_m_fore': self.scale_m_fore.state_dict(),
                         }
                     torch.cuda.empty_cache()
+                    clear_output(wait=True)
+                    list3 = self.finetuning_loss_history['Alpha']
+                    x = range(len(list3))
+                    plt.plot(x, list3, label='Alpha')
+                    plt.legend()
+                    plt.show()
+                    plt.close()
                     
                 pbar.set_description('processed: %d' % (1 + n))
                 if True:
@@ -164,9 +184,9 @@ class sb_muti_model(object):
             torch.cuda.empty_cache()
             
         if loss_plot:
-            list1 = self.finetuning_loss_history['loss']
+            list1 = self.finetuning_loss_history['loss_fore']
             x = range(len(list1))
-            plt.plot(x, list1, label='loss')
+            plt.plot(x, list1, label='loss_fore')
             plt.legend()
             plt.show()
             plt.close()
@@ -174,6 +194,13 @@ class sb_muti_model(object):
             list2 = self.finetuning_loss_history['PDE_loss_fore']
             x = range(len(list2))
             plt.plot(x, list2, label='PDE_loss_fore')
+            plt.legend()
+            plt.show()
+            plt.close()
+            
+            list3 = self.finetuning_loss_history['Alpha']
+            x = range(len(list3))
+            plt.plot(x, list3, label='Alpha')
             plt.legend()
             plt.show()
             plt.close()
@@ -256,9 +283,14 @@ class sb_muti_model(object):
             
             if one_step:
                 del_x_t = drift * (self.delta_t*(len(t_list_stage)-start_idx-1))
+                x_t = x_t + del_x_t.view(B, 1, 128, 128)
+                x_t = torch.where(mask.bool(), x_1_fixed, x_t)
+                x.append(x_t)
+                
+                return x
             else:
                 if t_new < t_list_stage[-2]:
-                    z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * self.delta_t
+                    z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**2)
                     del_x_t = drift * self.delta_t + np.sqrt(self.eps_train) * z
                     
                 else:
@@ -292,7 +324,7 @@ class sb_muti_model(object):
             y = s_m(t, t_ceils_stage)
             drift = v_m(x_t, y)
             if t_new < t_list_stage[-2]:
-                z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * self.delta_t
+                z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**2)
                 del_x_t = drift * self.delta_t + np.sqrt(eps_test) * z
                 
             else:

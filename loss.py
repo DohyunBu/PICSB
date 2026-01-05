@@ -38,7 +38,7 @@ def burgers_pde_mse_observed_pixel(u, coef, mask):
     r = (r).abs() * mask[:, 0, 1:-1, 1:-1]  
     return r.sum() / ((mask[:, 0, 1:-1, 1:-1]).sum())
 
-def burgers_pde_all_pixel(u, coef):
+def pde_loss_visualization(u, coef):
     device = u.device
     dtype  = u.dtype
     dx = 1/128

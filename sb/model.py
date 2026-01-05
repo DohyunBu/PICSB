@@ -145,8 +145,8 @@ class sb_muti_model(object):
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
-                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=0.3)
-                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=0.3)
+                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=0.7)
+                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=0.7)
                         torch.nn.utils.clip_grad_norm_(self.alpha, max_norm=0.1)
                         loss.backward()
                         self.optimizer_fore.step()

@@ -61,7 +61,7 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr/1000, momentum=0.1)
+        self.alpha_optimizer = optim.Adam([self.alpha], lr=self.base_lr)
         
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):

@@ -134,11 +134,11 @@ def plot_result(
 
     err_after  = np.abs(gtB - gen_after)
     
-    pde_map_gta = burgers_pde_all_pixel(torch.tensor(gtA).unsqueeze(0).unsqueeze(0), high_resol_coef)[0][0].detach().cpu().numpy()
-    pde_map_gtb = burgers_pde_all_pixel(torch.tensor(gtB).unsqueeze(0).unsqueeze(0), low_resol_coef)[0][0].detach().cpu().numpy()
-    pde_map_predict = burgers_pde_all_pixel(predict.unsqueeze(0).unsqueeze(0) , low_resol_coef)[0][0].detach().cpu().numpy()
+    pde_map_gta = pde_loss_visualization(torch.tensor(gtA).unsqueeze(0).unsqueeze(0), high_resol_coef)[0][0].detach().cpu().numpy()
+    pde_map_gtb = pde_loss_visualization(torch.tensor(gtB).unsqueeze(0).unsqueeze(0), low_resol_coef)[0][0].detach().cpu().numpy()
+    pde_map_predict = pde_loss_visualization(predict.unsqueeze(0).unsqueeze(0) , low_resol_coef)[0][0].detach().cpu().numpy()
     pde_map = np.abs(pde_map_predict - pde_map_gtb)
-    pde_map_predict_initial = burgers_pde_all_pixel(torch.tensor(dataB_predict_initial).unsqueeze(0).unsqueeze(0), torch.exp(estimated_coef))[0][0].detach().cpu().numpy()
+    pde_map_predict_initial = pde_loss_visualization(torch.tensor(dataB_predict_initial).unsqueeze(0).unsqueeze(0), torch.exp(estimated_coef))[0][0].detach().cpu().numpy()
     
     finite_err = err_after[np.isfinite(err_after)]
     vmin_e = 0.0

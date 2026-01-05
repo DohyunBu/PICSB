@@ -12,7 +12,7 @@ from loss import *
 from IPython.display import clear_output
 
 class sb_muti_model(object):
-    def __init__(self,pi_list,timepoints,N_train=1000,B=128,steps=60,eps_train=10,eps_test=10,base_lr=1e-3,pic_min=-1,pic_max=1,patience=1e8,lambda_=1e-3,clamp=False,save=False,mask_list=None, decay=0.8, directory_name ='model_bu/'):
+    def __init__(self,pi_list,timepoints,N_train=1000,B=128,steps=60,eps_train=10,eps_test=10,base_lr=1e-3,pic_min=-1,pic_max=1,patience=1e8,lambda_=1e-3,clamp=False,save=False,mask_list=None, decay=0.8):
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.length=len(pi_list)
         if mask_list is not None and len(mask_list) != self.length:
@@ -24,7 +24,6 @@ class sb_muti_model(object):
         self.timepoints = timepoints
         self.N_train=N_train
         self.B=B
-        self.d=pi_list[0].shape[0]
         self.steps=steps
         self.eps_train=eps_train
         self.eps_test=eps_test
@@ -39,11 +38,10 @@ class sb_muti_model(object):
         self.t_list = torch.cat([self.t_list, torch.tensor([timepoints[-1]], device=self.device, dtype=self.t_list.dtype)])
         self.save=save
         self.decay = decay
-        
-        
-        # self.alpha = nn.Parameter(torch.randn(1, requires_grad=True, device=self.device)/1000)
-        self.alpha = nn.Parameter(torch.tensor([1.], device=self.device, requires_grad=True, dtype=torch.float32))
-        
+        directory_name = 'model_bu/'
+        log_alpha_init = torch.empty(1).uniform_(np.log(1e-4), np.log(1e-2))
+        self.alpha = nn.Parameter(log_alpha_init.to(self.device))
+        # self.alpha = nn.Parameter(torch.tensor(np.log(1e-3), dtype=torch.float32))
         os.makedirs(directory_name, exist_ok=True)
         self.path = directory_name
 
@@ -61,17 +59,20 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.Adam([self.alpha], lr=self.base_lr*100)
-        
+        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr, momentum=0.5)
+
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
             return batch[0].to(self.device, dtype=torch.float32), batch[1].to(self.device, dtype=torch.float32)
         return batch.to(self.device, dtype=torch.float32), None
           
-    def train(self, low_resol_coef, loss_plot=True):
+    def train(self, loss_plot=True):
 
         self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Alpha":[]}
         
+        # fore_params = {name: param.clone().detach() for name, param in self.v_fore.named_parameters()}
+        # for param in fore_params.values():
+        #     param.requires_grad = False  
             
         with tqdm(total=self.N_train) as pbar:
             for n in range(self.N_train):
@@ -83,14 +84,17 @@ class sb_muti_model(object):
                 
                 self.optimizer_fore.zero_grad()
                 self.alpha_optimizer.zero_grad()
+                
                 for data_tuple in zip(*dataloader_list):
+                    # alpha = torch.exp(self.alpha)
+                    alpha = F.softplus(self.alpha)
                     num_all=[]
                     for i in range(self.length):
                         batch_i = data_tuple[i][0] if isinstance(data_tuple[i], (list, tuple)) else data_tuple[i]
                         num_all.append(batch_i.shape[0])
                         
                     for stage_index in range(self.length-1):
-                        if n < self.N_train / 3 :
+                        if n < 500 :
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
                             x_1_fixed = (x_1 * mask_1).detach()
@@ -110,17 +114,15 @@ class sb_muti_model(object):
                             
                             x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
                             
-                            pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
-                            pde_pde = smooth(x_1_hat)
+                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
                             
-                            loss = loss_fore + pde_pde
+                            # loss = 1 * loss_fore + 0 * pde_fore + 0 * pde_fore2
+                            loss = 1 * loss_fore
                         else:
                             x_0, mask_0 = self._split_batch(data_tuple[stage_index])
                             x_0 = torch.where(mask_1.bool(), x_1_fixed, x_0)
-                            x_1, mask_1 = self._split_batch(data_tuple[stage_index+1])
-                            # x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
-                            
+                            x_1 = self.fwd_start_from_t(x_0.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, one_step=False)[-1].cuda()
                             
                             x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0, x_1, forward=True)
                             x_t_fore = torch.where(mask_1.bool(), x_1_fixed, x_t_fore)
@@ -135,23 +137,28 @@ class sb_muti_model(object):
                             
                             x_1_hat = self.fwd_start_from_t(x_t_fore.view(-1,1,128,128), x_1_fixed, mask_1, self.v_fore, self.scale_m_fore, stage_index, start_t=t_fore.view(-1,1), one_step=False)[-1].cuda()
                             
-                            pde_fore = burgers_pde_mse(x_1_hat, coef=torch.abs(self.alpha))
-                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=torch.abs(self.alpha), mask=mask_1)
+                            pde_fore = burgers_pde_mse(x_1_hat, coef=alpha)
+                            pde_fore2 = burgers_pde_mse_observed_pixel(x_1_hat, coef=alpha, mask=mask_1)
                             
-                            loss = pde_fore
-                            
+                            # loss = 1 * loss_fore + 1 * pde_fore + 0 * pde_fore2
+                            loss = 1 * pde_fore
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
+                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=0.7)
+                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=0.7)
+                        torch.nn.utils.clip_grad_norm_(self.alpha, max_norm=0.1)
                         loss.backward()
                         self.optimizer_fore.step()
                         self.alpha_optimizer.step()
+                        
+                        # self.apply_ema_to_model(self.v_fore, fore_params)
                         
                 if n % 1 == 0:
                     with torch.no_grad():
                         self.finetuning_loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
                         self.finetuning_loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
-                        self.finetuning_loss_history['Alpha'].append(torch.abs(self.alpha).item())
+                        self.finetuning_loss_history['Alpha'].append(alpha.item())
                         
                 if self.save and n%100==0 and n!=0:
                     models_dict = {
@@ -160,17 +167,30 @@ class sb_muti_model(object):
                         }
                     torch.cuda.empty_cache()
                     clear_output(wait=True)
+                    list1 = self.finetuning_loss_history['loss_fore']
+                    x = range(len(list1))
+                    plt.plot(x, list1, label='loss_fore')
+                    plt.legend()
+                    plt.show()
+                    plt.close()
+                    
+                    list2 = self.finetuning_loss_history['PDE_loss_fore']
+                    x = range(len(list2))
+                    plt.plot(x, list2, label='PDE_loss_fore')
+                    plt.legend()
+                    plt.show()
+                    plt.close()
+                    
                     list3 = self.finetuning_loss_history['Alpha']
                     x = range(len(list3))
                     plt.plot(x, list3, label='Alpha')
-                    plt.ylim(0.,1.)
                     plt.legend()
                     plt.show()
                     plt.close()
                     
                 pbar.set_description('processed: %d' % (1 + n))
                 if True:
-                    pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'PDE_loss2':epoch_pde_loss_fore2.detach().cpu().numpy(), 'Alpha':torch.abs(self.alpha).detach().cpu().numpy()})
+                    pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'PDE_loss2':epoch_pde_loss_fore2.detach().cpu().numpy(), 'Alpha':alpha.detach().cpu().numpy()})
                     pbar.update(1)
                 
         if self.save :
@@ -288,8 +308,8 @@ class sb_muti_model(object):
                 return x
             else:
                 if t_new < t_list_stage[-2]:
-                    z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
-                    del_x_t = drift * self.delta_t #+ np.sqrt(self.eps_train) * z
+                    z = torch.randn(B, drift.shape[1], device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                    del_x_t = drift * self.delta_t + np.sqrt(self.eps_train) * z
                     
                 else:
                     del_x_t = drift * self.delta_t
@@ -322,7 +342,7 @@ class sb_muti_model(object):
             y = s_m(t, t_ceils_stage)
             drift = v_m(x_t, y)
             if t_new < t_list_stage[-2]:
-                z = torch.randn(B, self.d, device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
+                z = torch.randn(B, drift.shape[1], device=x_0.device, dtype=x_0.dtype) * (self.delta_t**0.5)
                 del_x_t = drift * self.delta_t + np.sqrt(eps_test) * z
                 
             else:

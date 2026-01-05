@@ -93,7 +93,6 @@ def fill_missing_with_linear_interp(data):
     
     return data_filled
 
-
 def fill_missing_with_cubic_interp(data):
     data_filled = {k: copy.deepcopy(v) for k, v in data.items()}
     U_obs = data_filled["U_obs"].copy()

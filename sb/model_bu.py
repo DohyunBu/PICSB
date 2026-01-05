@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import sb.networks
 import os
 from visualize import *
-from loss import *
+from loss_bu import *
 from IPython.display import clear_output
 
 class sb_muti_model(object):
@@ -59,7 +59,7 @@ class sb_muti_model(object):
         self.v_fore=sb.networks.SimpleUNet(condition_dim=32).to(self.device)
         self.scale_m_fore=sb.networks.scale_model_muti(output_size=32).to(self.device)
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.scale_m_fore.parameters()), lr=self.base_lr)
-        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr, momentum=0.5)
+        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr*10, momentum=0.5)
 
     def _split_batch(self, batch):
         if isinstance(batch, (list, tuple)):
@@ -145,10 +145,12 @@ class sb_muti_model(object):
                         epoch_loss_fore = loss_fore
                         epoch_pde_loss_fore = pde_fore
                         epoch_pde_loss_fore2 = pde_fore2
-                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=0.7)
-                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=0.7)
-                        torch.nn.utils.clip_grad_norm_(self.alpha, max_norm=0.1)
+                        
                         loss.backward()
+                        
+                        torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1.)
+                        torch.nn.utils.clip_grad_norm_(self.scale_m_fore.parameters(), max_norm=1.)
+                        torch.nn.utils.clip_grad_norm_(self.alpha, max_norm=0.1)
                         self.optimizer_fore.step()
                         self.alpha_optimizer.step()
                         

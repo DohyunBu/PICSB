@@ -29,7 +29,7 @@ def legacy_solver(args):
     dt = args.T_phys / t
 
     GRF = GaussianRF(2, s, 2 * math.pi, alpha=2.5, tau=7, device=device)
-
+    
     sol = np.zeros((T, n_frames, s // sub, s // sub))
     pbar = tqdm(range(T))
     for i in pbar:
@@ -37,7 +37,6 @@ def legacy_solver(args):
             u0 = GRF.sample(1)
             NS = KolmogorovFlow2d(u0, Re, n)
             NS.advance(T_in, delta_t=1e-3)
-
         sol_ini = NS.vorticity().squeeze(0).cpu().numpy()[::sub, ::sub]
         sol[i, 0, :, :] = sol_ini
 

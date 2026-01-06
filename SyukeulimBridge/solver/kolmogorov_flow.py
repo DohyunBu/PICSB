@@ -1,5 +1,6 @@
 import torch
 import math
+from tqdm import tqdm
 
 
 class KolmogorovFlow2d(object):
@@ -63,7 +64,8 @@ class KolmogorovFlow2d(object):
             w_h = self.w_h
 
         if real_space:
-            return torch.fft.irfft2(w_h, s=(self.s, self.s), norm="backward")
+            # return torch.fft.irfft2(w_h, s=(self.s, self.s), norm="backward")
+            return torch.fft.ifft2(w_h, s=(self.s, self.s), norm="backward").real
         else:
             return w_h
 
@@ -78,7 +80,8 @@ class KolmogorovFlow2d(object):
         psi_h = self.inv_lap * psi_h
 
         if real_space:
-            return torch.fft.irfft2(psi_h, s=(self.s, self.s), norm="backward")
+            # return torch.fft.irfft2(psi_h, s=(self.s, self.s), norm="backward")
+            return torch.fft.ifft2(psi_h, s=(self.s, self.s), norm="backward").real
         else:
             return psi_h
 
@@ -94,8 +97,10 @@ class KolmogorovFlow2d(object):
         v_h = stream_f * -1j * self.k_x
 
         if real_space:
-            q = torch.fft.irfft2(q_h, s=(self.s, self.s), norm="backward")
-            v = torch.fft.irfft2(v_h, s=(self.s, self.s), norm="backward")
+            # q = torch.fft.irfft2(q_h, s=(self.s, self.s), norm="backward")
+            # v = torch.fft.irfft2(v_h, s=(self.s, self.s), norm="backward")
+            q = torch.fft.ifft2(q_h, s=(self.s, self.s), norm="backward").real
+            v = torch.fft.ifft2(v_h, s=(self.s, self.s), norm="backward").real
             return q, v
         else:
             return q_h, v_h
@@ -128,28 +133,25 @@ class KolmogorovFlow2d(object):
 
         # Final time
         T = self.time + t
+        with tqdm(total=t, desc="Warm-up", unit="time") as pbar:
+            while self.time < T:
+                if self.time + delta_t > T:
+                    current_delta_t = T - self.time
+                else:
+                    current_delta_t = delta_t
 
-        # Advance solution in Fourier space
-        while self.time < T:
+                nonlin1 = self.nonlinear_term(self.w_h)
+                w_h_tilde = (self.w_h + current_delta_t * (nonlin1 - 0.5 * self.G * self.w_h)) / (
+                            1.0 + 0.5 * current_delta_t * self.G)
 
-            if self.time + delta_t > T:
-                current_delta_t = T - self.time
-            else:
-                current_delta_t = delta_t
+                nonlin2 = self.nonlinear_term(w_h_tilde)
+                self.w_h = (self.w_h + current_delta_t * (0.5 * (nonlin1 + nonlin2)
+                                - 0.5 * self.G * self.w_h)) / (
+                                1.0 + 0.5 * current_delta_t * self.G)
 
-            # Inner-step of Heun's method
-            nonlin1 = self.nonlinear_term(self.w_h)
-            w_h_tilde = (self.w_h + current_delta_t * (nonlin1 - 0.5 * self.G * self.w_h)) / (
-                        1.0 + 0.5 * current_delta_t * self.G)
+                self.w_h *= self.dealias
+                self.time += current_delta_t
 
-            # Cranck-Nicholson + Heun update
-            nonlin2 = self.nonlinear_term(w_h_tilde)
-            self.w_h = (self.w_h + current_delta_t * (0.5 * (nonlin1 + nonlin2) - 0.5 * self.G * self.w_h)) / (
-                        1.0 + 0.5 * current_delta_t * self.G)
-
-            # De-alias
-            self.w_h *= self.dealias
-            self.time += current_delta_t
-
+                pbar.update(current_delta_t)
 
 

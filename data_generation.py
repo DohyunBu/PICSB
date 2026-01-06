@@ -126,6 +126,52 @@ def apply_spatial_mask(U: np.ndarray, mask: np.ndarray, fill_value: float = np.n
     U_obs[mask] = U[mask]
     
     return U_obs
+import numpy as np
+
+def sample_u0_burgers_paper(
+    Nx: int,
+    L: float = 1.0,
+    alpha: float = 25.0,      # (-Δ + alpha I)
+    amp: float = 625.0,       # overall scale
+    rng: np.random.Generator | None = None,
+    remove_mean: bool = True,
+) -> np.ndarray:
+    """
+    u0 ~ N(0, amp * (-Δ + alpha I)^(-2)) on 1D torus of length L.
+
+    Returns:
+        u0: (Nx,) float32, periodic on grid x in [0, L)
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # Fourier mode indices consistent with np.fft conventions
+    k = np.fft.fftfreq(Nx, d=L / Nx)  # cycles per unit length
+    lam = (2.0 * np.pi * k) ** 2      # eigenvalues of (-Δ) on torus
+
+    # Covariance eigenvalues for (-Δ + alpha I)^(-2)
+    # => spectral density ~ 1/(lam + alpha)^2
+    S = amp / (lam + alpha) ** 2
+
+    # Sample complex Fourier coefficients with the desired variance.
+    # For a real field: enforce Hermitian symmetry by constructing in frequency domain.
+    z = rng.standard_normal(Nx) + 1j * rng.standard_normal(Nx)
+    uhat = np.sqrt(S / 2.0) * z
+
+    # Enforce real-valued signal constraints for rFFT-compatible symmetry
+    uhat[0] = np.sqrt(S[0]) * rng.standard_normal() + 0j
+    if Nx % 2 == 0:
+        uhat[Nx // 2] = np.sqrt(S[Nx // 2]) * rng.standard_normal() + 0j
+    # Hermitian symmetry: uhat[-k] = conj(uhat[k])
+    for i in range(1, (Nx // 2) if Nx % 2 == 0 else (Nx + 1) // 2):
+        uhat[-i] = np.conj(uhat[i])
+
+    u0 = np.fft.ifft(uhat).real
+
+    if remove_mean:
+        u0 = u0 - u0.mean()
+
+    return u0.astype(np.float32)
 
 def generate_dataset(
     n_samples: int,

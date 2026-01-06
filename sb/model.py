@@ -40,8 +40,8 @@ class sb_muti_model(object):
         self.decay = decay
         directory_name = 'model/'
         log_alpha_init = torch.empty(1).uniform_(np.log(1e-4), np.log(1e-2))
-        self.alpha = nn.Parameter(log_alpha_init.to(self.device))
-        # self.alpha = nn.Parameter(torch.tensor(np.log(1e-3), dtype=torch.float32))
+        # self.alpha = nn.Parameter(log_alpha_init.to(self.device))
+        self.alpha = nn.Parameter(torch.tensor(0.8*np.log(1e-3), dtype=torch.float32))
         os.makedirs(directory_name, exist_ok=True)
         self.path = directory_name
 

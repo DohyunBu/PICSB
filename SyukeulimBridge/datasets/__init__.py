@@ -1,9 +1,9 @@
-from .era5 import DatasetERA5SR
+# from .era5 import DatasetERA5SR
 from .kol import DatasetKolSR
-from .channel import DatasetChannelSR
-from .sst import DatasetSSTSR
-from .rd_gs import DatasetRDGSSR
-from .cylinder2d import DatasetCy2d
+# from .channel import DatasetChannelSR
+# from .sst import DatasetSSTSR
+# from .rd_gs import DatasetRDGSSR
+# from .cylinder2d import DatasetCy2d
 import torch
 import numpy as np
 

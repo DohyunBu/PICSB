@@ -144,19 +144,19 @@ def plot_result(
     vmin_e = 0.0
     vmax_e = np.percentile(finite_err, 99) if finite_err.size > 0 else 1.0
     
-    finite_pde_gta = pde_map_gta[1:-1, 1:-1][np.isfinite(pde_map_gta[1:-1, 1:-1])]
+    finite_pde_gta = pde_map_gta[1:-1, 2:-2][np.isfinite(pde_map_gta[1:-1, 2:-2])]
     vmin_gta = 0.0
     vmax_gta = np.percentile(finite_pde_gta, 99) if finite_pde_gta.size > 0 else 1.0 
     
-    finite_pde_gtb = pde_map_gtb[1:-1, 1:-1][np.isfinite(pde_map_gtb[1:-1, 1:-1])]
+    finite_pde_gtb = pde_map_gtb[1:-1, 2:-2][np.isfinite(pde_map_gtb[1:-1, 2:-2])]
     vmin_gtb = 0.0
     vmax_gtb = np.percentile(finite_pde_gtb, 99) if finite_pde_gtb.size > 0 else 1.0 
     
-    finite_pde_predict = pde_map_predict[1:-1, 1:-1][np.isfinite(pde_map_predict[1:-1, 1:-1])]
+    finite_pde_predict = pde_map_predict[1:-1, 2:-2][np.isfinite(pde_map_predict[1:-1, 2:-2])]
     vmin_predict = 0.0
     vmax_predict = np.percentile(finite_pde_predict, 99) if finite_pde_predict.size > 0 else 1.0 
     
-    finite_pde_predict_initial = pde_map_predict_initial[1:-1, 1:-1][np.isfinite(pde_map_predict_initial[1:-1, 1:-1])]
+    finite_pde_predict_initial = pde_map_predict_initial[1:-1, 2:-2][np.isfinite(pde_map_predict_initial[1:-1, 2:-2])]
     vmin_predict_initial = 0.0
     vmax_predict_initial = np.percentile(finite_pde_predict_initial, 99) if finite_pde_predict_initial.size > 0 else 1.0 
     

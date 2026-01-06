@@ -14,10 +14,9 @@ def burgers_pde_mse(u, coef):
     
     u_t  = F.conv2d(u,  deriv_t, padding=(1,0))
     u_x  = F.conv2d(u,  deriv_x, padding=(0,1))
-    u_xx = F.conv2d(u, deriv_xx, padding=(0,1))
+    u_xx = F.conv2d(u_x, deriv_x, padding=(0,1))
 
-    # coef = torch.as_tensor(coef, device=device, dtype=dtype)
-    r = (u_t + u * u_x - coef * u_xx)[:, 0, 1:-1, 1:-1]  
+    r = (u_t + u * u_x - coef * u_xx)[:, 0, 1:-1, 2:-2]  
     return ((r).abs()**2).mean()
 
 def burgers_pde_mse_observed_pixel(u, coef, mask):
@@ -31,12 +30,11 @@ def burgers_pde_mse_observed_pixel(u, coef, mask):
     deriv_xx = torch.tensor([[1,-2,1]],     device=device, dtype=dtype).view(1,1,1,3) / (dx * dx)
     u_t  = F.conv2d(u,  deriv_t, padding=(1,0))
     u_x  = F.conv2d(u,  deriv_x, padding=(0,1))
-    u_xx = F.conv2d(u, deriv_xx, padding=(0,1))
+    u_xx = F.conv2d(u_x, deriv_x, padding=(0,1))
 
-    # coef = torch.as_tensor(coef, device=device, dtype=dtype)
-    r = (u_t + u * u_x - coef * u_xx)[:, 0, 1:-1, 1:-1]   
-    r = (r).abs() * mask[:, 0, 1:-1, 1:-1]  
-    return r.sum() / ((mask[:, 0, 1:-1, 1:-1]).sum())
+    r = (u_t + u * u_x - coef * u_xx)[:, 0, 1:-1, 2:-2]   
+    r = (r).abs() * mask[:, 0, 1:-1, 2:-2]  
+    return r.sum() / ((mask[:, 0, 1:-1, 2:-2]).sum())
 
 def pde_loss_visualization(u, coef):
     device = u.device
@@ -49,9 +47,7 @@ def pde_loss_visualization(u, coef):
     deriv_xx = torch.tensor([[1,-2,1]],     device=device, dtype=dtype).view(1,1,1,3) / (dx * dx)
     u_t  = F.conv2d(u,  deriv_t, padding=(1,0)) 
     u_x  = F.conv2d(u,  deriv_x, padding=(0,1))   
-    u_xx = F.conv2d(u, deriv_xx, padding=(0,1))  
-
-    # coef = torch.as_tensor(coef, device=device, dtype=dtype)
+    u_xx = F.conv2d(u_x, deriv_x, padding=(0,1))  
 
     r = (u_t + u * u_x - coef * u_xx).abs()  
 

@@ -28,8 +28,10 @@ def legacy_solver(args):
     t = n_frames - 1
     dt = args.T_phys / t
 
-    GRF = GaussianRF(2, s, 2 * math.pi, alpha=2.5, tau=7, device=device)
-    
+    # GRF = GaussianRF(2, s, 2 * math.pi, alpha=2.5, tau=7, device=device)
+    GRF = GaussianRF2d(s, s, L1=2*math.pi, L2=2*math.pi,
+                   alpha=2.5, tau=7.0, sigma=0.7,
+                   device=device, dtype=torch.float64)
     sol = np.zeros((T, n_frames, s // sub, s // sub))
     pbar = tqdm(range(T))
     for i in pbar:
@@ -40,9 +42,9 @@ def legacy_solver(args):
         sol_ini = NS.vorticity().squeeze(0).cpu().numpy()[::sub, ::sub]
         sol[i, 0, :, :] = sol_ini
 
-        for j in range(t):
+        for j in tqdm(range(t)):
             t1 = default_timer()
-            NS.advance(dt, delta_t=1e-3)
+            NS.advance(dt, delta_t=1e-4)
             sol[i, j + 1, :, :] = NS.vorticity().squeeze(0).cpu().numpy()[::sub, ::sub]
             t2 = default_timer()
 
@@ -81,7 +83,7 @@ def gen_data(args):
     w = grf.sample(bsize)
     w = solver.advance(w, f, T=100, Re=re, adaptive=True)
     
-    init_vor = w[:, ::x_sub, ::x_sub].cpu().type(torch.float32).numpy()
+    init_vor = w[:, ::x_sub, ::x_sub].cpu().type(torch.float64).numpy()
     for j in pbar:
         vor[:, j, 0, :, :] = init_vor
 
@@ -89,7 +91,7 @@ def gen_data(args):
             t1 = default_timer()
 
             w = solver.advance(w, f, T=dt, Re=re, adaptive=True)
-            vor[:, j, k+1, :, :] = w[:,::x_sub,::x_sub].cpu().type(torch.float32).numpy()
+            vor[:, j, k+1, :, :] = w[:,::x_sub,::x_sub].cpu().type(torch.float64).numpy()
 
             t2 = default_timer()
 

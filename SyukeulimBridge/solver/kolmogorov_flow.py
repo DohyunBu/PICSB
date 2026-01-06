@@ -34,11 +34,16 @@ class KolmogorovFlow2d(object):
         self.time = 0.0
 
         # Current vorticity in Fourier space
+        w0 = w0.to(torch.float64)
         self.w_h = torch.fft.fft2(w0, norm="backward")
+        x = torch.linspace(0, 2*math.pi, self.s+1, device=self.device, dtype=torch.float64)[:-1]
+        X, Y = torch.meshgrid(x, x, indexing="ij")
 
+        f = -4.0 * torch.cos(4.0 * Y)
+        self.f_h = torch.fft.fft2(f, norm="backward")
         # Wavenumbers in y and x directions
-        self.k_y = torch.cat((torch.arange(start=0, end=self.s // 2, step=1, dtype=torch.float32, device=self.device), \
-                              torch.arange(start=-self.s // 2, end=0, step=1, dtype=torch.float32, device=self.device)),
+        self.k_y = torch.cat((torch.arange(start=0, end=self.s // 2, step=1, dtype=torch.float64, device=self.device), \
+                              torch.arange(start=-self.s // 2, end=0, step=1, dtype=torch.float64, device=self.device)),
                              0).repeat(self.s, 1)
 
         self.k_x = self.k_y.clone().transpose(0, 1)
@@ -49,10 +54,10 @@ class KolmogorovFlow2d(object):
         self.inv_lap = 1.0 / self.inv_lap
 
         # Negative scaled Laplacian
-        self.G = (1.0 / self.Re) * (self.k_x ** 2 + self.k_y ** 2)
-
+        self.G = (1.0 / self.Re) * (self.k_x ** 2 + self.k_y ** 2) + 0.1
+        
         # Dealiasing mask using 2/3 rule
-        self.dealias = (self.k_x ** 2 + self.k_y ** 2 <= (self.s / 3.0) ** 2).float()
+        self.dealias = (self.k_x ** 2 + self.k_y ** 2 <= (self.s / 3.0) ** 2).double()
         # Ensure mean zero
         self.dealias[0, 0] = 0.0
 
@@ -108,7 +113,9 @@ class KolmogorovFlow2d(object):
     # Compute non-linear term + forcing from given vorticity (Fourier space)
     def nonlinear_term(self, w_h):
         # Physical space vorticity
-        w = torch.fft.ifft2(w_h, s=(self.s, self.s), norm="backward")
+        # w = torch.fft.ifft2(w_h, s=(self.s, self.s), norm="backward")
+        w_h = w_h * self.dealias
+        w = torch.fft.ifft2(w_h, s=(self.s, self.s), norm="backward").real
 
         # Velocity field in physical space
         q, v = self.velocity_field(self.stream_function(w_h, real_space=False), real_space=True)
@@ -121,37 +128,45 @@ class KolmogorovFlow2d(object):
         t2 = self.k_y * t2
 
         nonlin = -1j * (t1 + t2)
-
+        nonlin = nonlin * self.dealias
         # Apply forcing: -ncos(ny)
-        if self.n > 0:
-            nonlin[..., 0, self.n] -= (float(self.n) / 2.0) * (self.s ** 2)
-            nonlin[..., 0, -self.n] -= (float(self.n) / 2.0) * (self.s ** 2)
-
+        # if self.n > 0:
+        #     nonlin[..., 0, self.n] -= (float(self.n) / 2.0) * (self.s ** 2)
+        #     nonlin[..., 0, -self.n] -= (float(self.n) / 2.0) * (self.s ** 2)
+        nonlin = nonlin + self.f_h
         return nonlin
 
     def advance(self, t, delta_t=1e-3):
 
         # Final time
         T = self.time + t
-        with tqdm(total=t, desc="Warm-up", unit="time") as pbar:
-            while self.time < T:
-                if self.time + delta_t > T:
-                    current_delta_t = T - self.time
-                else:
-                    current_delta_t = delta_t
 
-                nonlin1 = self.nonlinear_term(self.w_h)
-                w_h_tilde = (self.w_h + current_delta_t * (nonlin1 - 0.5 * self.G * self.w_h)) / (
-                            1.0 + 0.5 * current_delta_t * self.G)
+        # Advance solution in Fourier space
+        n_steps = int(math.ceil(t / delta_t))
+        for _ in range(n_steps):
+            current_delta_t = min(delta_t, T - self.time)
+            # if self.time + delta_t > T:
+            #     current_delta_t = T - self.time
+            # else:
+            #     current_delta_t = delta_t
 
-                nonlin2 = self.nonlinear_term(w_h_tilde)
-                self.w_h = (self.w_h + current_delta_t * (0.5 * (nonlin1 + nonlin2)
-                                - 0.5 * self.G * self.w_h)) / (
-                                1.0 + 0.5 * current_delta_t * self.G)
+            # Inner-step of Heun's method
+            nonlin1 = self.nonlinear_term(self.w_h)
+            w_h_tilde = (self.w_h + current_delta_t * (nonlin1 - 0.5 * self.G * self.w_h)) / (
+                        1.0 + 0.5 * current_delta_t * self.G)
 
-                self.w_h *= self.dealias
-                self.time += current_delta_t
+            # Cranck-Nicholson + Heun update
+            nonlin2 = self.nonlinear_term(w_h_tilde)
+            self.w_h = (self.w_h + current_delta_t * (0.5 * (nonlin1 + nonlin2) - 0.5 * self.G * self.w_h)) / (
+                        1.0 + 0.5 * current_delta_t * self.G)
 
-                pbar.update(current_delta_t)
+            # De-alias
+            self.w_h *= self.dealias
+            self.time += current_delta_t
+            if not torch.isfinite(self.w_h).all():
+                print("NaN/Inf detected at time=", self.time, "dt=", current_delta_t)
+                print("max|w_h|=", torch.nan_to_num(self.w_h.abs(), nan=0.0, posinf=0.0, neginf=0.0).max().item())
+                break
+
 
 

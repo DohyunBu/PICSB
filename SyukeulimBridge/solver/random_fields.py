@@ -6,7 +6,7 @@ torch.manual_seed(0)
 
 
 class GaussianRF(object):
-    def __init__(self, dim, size, length=1.0, alpha=2.0, tau=3.0, sigma=None, boundary="periodic", constant_eig=False, device=None):
+    def __init__(self, dim, size, length=1.0, alpha=2.0, tau=3.0, sigma=None, constant_eig=False, device=None):
 
         self.dim = dim
         self.device = device
@@ -64,14 +64,18 @@ class GaussianRF(object):
 
         self.size = tuple(self.size)
 
+    # def sample(self, N):
+
+    #     coeff = torch.randn(N, *self.size, dtype=torch.cdouble, device=self.device)
+    #     coeff = self.sqrt_eig*coeff
+
+    #     u = torch.fft.irfftn(coeff, self.size, norm="backward")
+    #     return u
     def sample(self, N):
-
-        coeff = torch.randn(N, *self.size, dtype=torch.cfloat, device=self.device)
-        coeff = self.sqrt_eig*coeff
-
-        u = torch.fft.irfftn(coeff, self.size, norm="backward")
+        coeff = torch.randn(N, *self.size, dtype=torch.cdouble, device=self.device)
+        coeff = self.sqrt_eig * coeff
+        u = torch.fft.ifftn(coeff, s=self.size, norm="backward").real
         return u
-
 
 class GaussianRF2d(object):
 

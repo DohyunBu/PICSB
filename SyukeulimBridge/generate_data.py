@@ -38,7 +38,7 @@ def legacy_solver(args):
         if args.independent_ic or i == 0:
             u0 = GRF.sample(1)
             NS = KolmogorovFlow2d(u0, Re, n)
-            NS.advance(T_in, delta_t=1e-3)
+            NS.advance(T_in, delta_t=1e-4)
         sol_ini = NS.vorticity().squeeze(0).cpu().numpy()[::sub, ::sub]
         sol[i, 0, :, :] = sol_ini
 

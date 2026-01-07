@@ -55,7 +55,7 @@ class KolmogorovFlow2d(object):
 
         # Negative scaled Laplacian
         self.G = (1.0 / self.Re) * (self.k_x ** 2 + self.k_y ** 2) + 0.1
-        
+        # self.G = torch.zeros_like(self.k_x, dtype=self.k_x.dtype, device=self.k_x.device)
         # Dealiasing mask using 2/3 rule
         self.dealias = (self.k_x ** 2 + self.k_y ** 2 <= (self.s / 3.0) ** 2).double()
         # Ensure mean zero
@@ -111,6 +111,7 @@ class KolmogorovFlow2d(object):
             return q_h, v_h
 
     # Compute non-linear term + forcing from given vorticity (Fourier space)
+    # u * del_w
     def nonlinear_term(self, w_h):
         # Physical space vorticity
         # w = torch.fft.ifft2(w_h, s=(self.s, self.s), norm="backward")
@@ -153,7 +154,7 @@ class KolmogorovFlow2d(object):
             # Inner-step of Heun's method
             nonlin1 = self.nonlinear_term(self.w_h)
             w_h_tilde = (self.w_h + current_delta_t * (nonlin1 - 0.5 * self.G * self.w_h)) / (
-                        1.0 + 0.5 * current_delta_t * self.G)
+                        1.0 + 0.5 * current_delta_t * self.G)   
 
             # Cranck-Nicholson + Heun update
             nonlin2 = self.nonlinear_term(w_h_tilde)
@@ -166,7 +167,7 @@ class KolmogorovFlow2d(object):
             if not torch.isfinite(self.w_h).all():
                 print("NaN/Inf detected at time=", self.time, "dt=", current_delta_t)
                 print("max|w_h|=", torch.nan_to_num(self.w_h.abs(), nan=0.0, posinf=0.0, neginf=0.0).max().item())
-                break
+                # break
 
 
 

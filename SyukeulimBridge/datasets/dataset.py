@@ -45,8 +45,10 @@ class PDEPairDataset(Dataset):
     def __getitem__(self, idx):        
         xl = self._to_tensor_x(self.low[idx])
         xh = self._to_tensor_x(self.high[idx])
-        
-        ml = self._to_tensor_m(self.ml[idx])
+        if self.ml is None:
+            ml = torch.zeros_like(xl, dtype=torch.bool)
+        else:
+            ml = self._to_tensor_m(self.ml[idx])
         mh = self._to_tensor_m(self.mh[idx]) 
         
-        return xh, xl, mh, ml
+        return xl, xh, ml, mh

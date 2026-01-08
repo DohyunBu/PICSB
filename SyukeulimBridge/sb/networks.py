@@ -3,6 +3,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import Dataset
+import math
+import functools
+from .module_util import *
 
 class AdaIN(nn.Module):
     def __init__(self, feature_channels, condition_dim):
@@ -57,6 +60,172 @@ class SimpleUNet(nn.Module):
         out = self.final_conv(x5)  
         return out
 
+class ConditionalUNet(nn.Module):
+    def __init__(
+        self,
+        condition_dim: int = 128,
+        in_channels: int = 1,
+        out_channels: int = 1,
+        nf: int = 64,
+        ch_mul=(1, 2, 4, 8, 16),
+    ):
+        super().__init__()
+
+        self.depth = depth = len(ch_mul) - 1
+
+        block_class = functools.partial(ResBlock, conv=default_conv, act=NonLinearity())
+
+        # 입력은 x 하나만 받으므로 in_channels 그대로
+        self.init_conv = default_conv(in_channels, nf, 7)
+
+        time_dim = condition_dim
+
+        # layers
+        self.downs = nn.ModuleList([])
+        self.ups = nn.ModuleList([])
+
+        for i in range(depth):
+            dim_in  = nf * ch_mul[i]
+            dim_out = nf * ch_mul[i + 1]
+
+            self.downs.append(nn.ModuleList([
+                block_class(dim_in=dim_in, dim_out=dim_in, time_emb_dim=time_dim),
+                block_class(dim_in=dim_in, dim_out=dim_in, time_emb_dim=time_dim),
+                Downsample(dim_in, dim_out) if i != (depth - 1) else default_conv(dim_in, dim_out),
+            ]))
+
+            self.ups.insert(0, nn.ModuleList([
+                block_class(dim_in=dim_out + dim_in, dim_out=dim_out, time_emb_dim=time_dim),
+                block_class(dim_in=dim_out + dim_in, dim_out=dim_out, time_emb_dim=time_dim),
+                Upsample(dim_out, dim_in) if i != 0 else default_conv(dim_out, dim_in),
+            ]))
+
+        mid_dim = nf * ch_mul[-1]
+        self.mid_block1 = block_class(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=time_dim)
+        self.mid_block2 = block_class(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=time_dim)
+
+        self.final_res_block = block_class(dim_in=nf * 2, dim_out=nf, time_emb_dim=time_dim)
+        self.final_conv = nn.Conv2d(nf, out_channels, 3, 1, 1)
+
+    def check_image_size(self, x, h, w):
+        s = int(math.pow(2, self.depth))
+        mod_pad_h = (s - h % s) % s
+        mod_pad_w = (s - w % s) % s
+        if mod_pad_h != 0 or mod_pad_w != 0:
+            x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), mode="reflect")
+        return x
+
+    def forward(self, x, cond):
+        B, _, H, W = x.shape
+        # cond shape 정리
+        if cond.dim() == 4:
+            cond = cond.view(cond.size(0), -1)
+        elif cond.dim() != 2:
+            raise ValueError(f"cond must be (B, condition_dim) or (B, condition_dim, 1, 1), got {cond.shape}")
+
+        # padding
+        x_in = self.check_image_size(x, H, W)
+        # stem
+        x0 = self.init_conv(x_in)
+        x_skip0 = x0.clone()
+
+        # cond -> time embedding (ResBlock의 scale/shift에 쓰임)
+        t = cond.to(x0.device)
+        # down
+        h = []
+        for b1, b2, downsample in self.downs:
+            x0 = b1(x0, t)
+            h.append(x0)
+
+            x0 = b2(x0, t)
+            h.append(x0)
+            x0 = downsample(x0)
+
+        # mid
+        x0 = self.mid_block1(x0, t)
+        x0 = self.mid_block2(x0, t)
+
+        # up
+        for b1, b2, upsample in self.ups:
+            x0 = torch.cat([x0, h.pop()], dim=1)
+            x0 = b1(x0, t)
+            x0 = torch.cat([x0, h.pop()], dim=1)
+            x0 = b2(x0, t)
+            x0 = upsample(x0)
+
+        # tail
+        x0 = torch.cat([x0, x_skip0], dim=1)
+        x0 = self.final_res_block(x0, t)
+        out = self.final_conv(x0)
+        # 원래 H, W로 crop
+        # out = out[..., :H, :W]
+        return out
+
+
+class ConditionalUNet3D(nn.Module):
+    def __init__(self, condition_dim=128, in_channels=1, out_channels=1, nf=32, ch_mul=(1,2,4,8)):
+        super().__init__()
+        self.depth = depth = len(ch_mul) - 1
+        block = functools.partial(ResBlock3D, conv=default_conv3d, act=nn.SiLU())
+
+        self.init_conv = default_conv3d(in_channels, nf, kernel_size=7, bias=False)
+
+        self.downs = nn.ModuleList()
+        self.ups   = nn.ModuleList()
+
+        for i in range(depth):
+            dim_in  = nf * ch_mul[i]
+            dim_out = nf * ch_mul[i+1]
+
+            self.downs.append(nn.ModuleList([
+                block(dim_in=dim_in,  dim_out=dim_in,  time_emb_dim=condition_dim),
+                block(dim_in=dim_in,  dim_out=dim_in,  time_emb_dim=condition_dim),
+                Downsample3d(dim_in, dim_out) if i != (depth-1) else default_conv3d(dim_in, dim_out, 3),
+            ]))
+
+            # up path (reverse insert)
+            self.ups.insert(0, nn.ModuleList([
+                block(dim_in=dim_out + dim_in, dim_out=dim_out, time_emb_dim=condition_dim),
+                block(dim_in=dim_out + dim_in, dim_out=dim_out, time_emb_dim=condition_dim),
+                Upsample3d(dim_out, dim_in) if i != 0 else default_conv3d(dim_out, dim_in, 3),
+            ]))
+
+        mid_dim = nf * ch_mul[-1]
+        self.mid1 = block(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=condition_dim)
+        self.mid2 = block(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=condition_dim)
+
+        self.final_res = block(dim_in=nf*2, dim_out=nf, time_emb_dim=condition_dim)
+        self.final_conv = nn.Conv3d(nf, out_channels, 3, 1, 1)
+
+    def forward(self, x, cond):
+        # x: (B,1,T,X,Y), cond: (B,cond_dim)
+        if cond.dim() == 4:
+            cond = cond.view(cond.size(0), -1)
+        elif cond.dim() != 2:
+            raise ValueError(f"cond must be (B, condition_dim), got {cond.shape}")
+
+        x0 = self.init_conv(x)
+        x_skip = x0
+
+        h = []
+        for b1, b2, down in self.downs:
+            x0 = b1(x0, cond); h.append(x0)
+            x0 = b2(x0, cond); h.append(x0)
+            x0 = down(x0)
+
+        x0 = self.mid1(x0, cond)
+        x0 = self.mid2(x0, cond)
+
+        for b1, b2, up in self.ups:
+            x0 = torch.cat([x0, h.pop()], dim=1)
+            x0 = b1(x0, cond)
+            x0 = torch.cat([x0, h.pop()], dim=1)
+            x0 = b2(x0, cond)
+            x0 = up(x0)
+
+        x0 = torch.cat([x0, x_skip], dim=1)
+        x0 = self.final_res(x0, cond)
+        return self.final_conv(x0)
     
 class time_embedding(nn.Module):
     def __init__(self, output_dim, hidden_dim=16, input_dim=2):

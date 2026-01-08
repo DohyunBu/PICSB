@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import torch
-from loss import *
+from sb import loss
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 plt.rcParams["figure.dpi"] = 120

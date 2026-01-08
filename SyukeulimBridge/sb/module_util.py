@@ -143,15 +143,16 @@ class Block(nn.Module):
         return x
 
 
+
 class ResBlock(nn.Module):
     def __init__(self, conv, dim_in, dim_out, time_emb_dim=None, act=NonLinearity()):
-        super(ResBlock, self).__init__()
+        super().__init__()
         self.mlp = nn.Sequential(
             act, nn.Linear(time_emb_dim, dim_out * 2)
         ) if time_emb_dim else None
 
-        self.block1 = Block(conv, dim_in, dim_out, act)
-        self.block2 = Block(conv, dim_out, dim_out, act)
+        self.block1 = Block(conv, dim_in, dim_out, act)     
+        self.block2 = Block(conv, dim_out, dim_out, act) 
         self.res_conv = conv(dim_in, dim_out, 1) if dim_in != dim_out else nn.Identity()
 
     def forward(self, x, time_emb=None):
@@ -165,65 +166,6 @@ class ResBlock(nn.Module):
         h = self.block2(h)
 
         return h + self.res_conv(x)
-
-
-# channel attention
-class LinearAttention(nn.Module):
-    def __init__(self, dim, heads=4, dim_head=32):
-        super().__init__()
-        self.scale = dim_head ** -0.5
-        self.heads = heads
-        hidden_dim = dim_head * heads
-
-        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
-        self.to_out = nn.Sequential(
-            nn.Conv2d(hidden_dim, dim, 1),
-            LayerNorm(dim)
-        )
-
-    def forward(self, x):
-        b, c, h, w = x.shape
-        qkv = self.to_qkv(x).chunk(3, dim = 1)
-        q, k, v = map(lambda t: rearrange(t, 'b (h c) x y -> b h c (x y)', h=self.heads), qkv)
-
-        q = q.softmax(dim=-2)
-        k = k.softmax(dim=-1)
-
-        q = q * self.scale
-        v = v / (h * w)
-
-        context = torch.einsum('b h d n, b h e n -> b h d e', k, v)
-
-        out = torch.einsum('b h d e, b h d n -> b h e n', context, q)
-        out = rearrange(out, 'b h c (x y) -> b (h c) x y', h=self.heads, x=h, y=w)
-        return self.to_out(out)
-
-
-# self attention on each channel
-class Attention(nn.Module):
-    def __init__(self, dim, heads=4, dim_head=32):
-        super().__init__()
-        self.scale = dim_head ** -0.5
-        self.heads = heads
-        hidden_dim = dim_head * heads
-
-        self.to_qkv = nn.Conv2d(dim, hidden_dim * 3, 1, bias=False)
-        self.to_out = nn.Conv2d(hidden_dim, dim, 1)
-
-    def forward(self, x):
-        b, c, h, w = x.shape
-        qkv = self.to_qkv(x).chunk(3, dim=1)
-        q, k, v = map(lambda t: rearrange(t, 'b (h c) x y -> b h c (x y)', h=self.heads), qkv)
-
-        q = q * self.scale
-
-        sim = torch.einsum('b h d i, b h d j -> b h i j', q, k)
-        attn = sim.softmax(dim=-1)
-        out = torch.einsum('b h i j, b h d j -> b h i d', attn, v)
-
-        out = rearrange(out, 'b h (x y) d -> b (h d) x y', x=h, y=w)
-        return self.to_out(out)
-
 
 class Upsampler(nn.Sequential):
     def __init__(self, conv, scale, n_feats, bn=False, act=False, bias=True):
@@ -275,3 +217,45 @@ def initialize_weights(net_l, scale=1.):
                 init.constant_(m.bias.data, 0.0)
 
 
+def default_conv3d(dim_in, dim_out, kernel_size=3, bias=False):
+    return nn.Conv3d(dim_in, dim_out, kernel_size, padding=kernel_size//2, bias=bias)
+
+def Downsample3d(dim, dim_out=None):
+    return nn.Conv3d(dim, dim_out if dim_out is not None else dim, kernel_size=4, stride=2, padding=1)
+
+def Upsample3d(dim, dim_out=None):
+    return nn.Sequential(
+        nn.Upsample(scale_factor=2, mode="nearest"),
+        nn.Conv3d(dim, dim_out if dim_out is not None else dim, 3, 1, 1)
+    )
+
+class Block3D(nn.Module):
+    def __init__(self, conv, dim_in, dim_out, act=nn.SiLU()):
+        super().__init__()
+        self.proj = conv(dim_in, dim_out)
+        self.act  = act
+
+    def forward(self, x, scale_shift=None):
+        x = self.proj(x)
+        if scale_shift is not None:
+            scale, shift = scale_shift
+            x = x * (scale + 1) + shift
+        return self.act(x)
+
+class ResBlock3D(nn.Module):
+    def __init__(self, conv, dim_in, dim_out, time_emb_dim=None, act=nn.SiLU()):
+        super().__init__()
+        self.mlp = nn.Sequential(act, nn.Linear(time_emb_dim, dim_out * 2)) if time_emb_dim else None
+        self.block1 = Block3D(conv, dim_in,  dim_out, act)
+        self.block2 = Block3D(conv, dim_out, dim_out, act)
+        self.res_conv = conv(dim_in, dim_out, 1) if dim_in != dim_out else nn.Identity()
+
+    def forward(self, x, time_emb=None):
+        scale_shift = None
+        if self.mlp is not None and time_emb is not None:
+            h = self.mlp(time_emb)             
+            h = h.view(h.size(0), h.size(1), 1, 1, 1)
+            scale_shift = h.chunk(2, dim=1)
+        y = self.block1(x, scale_shift=scale_shift)
+        y = self.block2(y)
+        return y + self.res_conv(x)

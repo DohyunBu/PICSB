@@ -60,8 +60,8 @@ class RandomOrLearnedSinusoidalPosEmb(nn.Module):
 
 
 def NonLinearity(inplace=False):
-    return nn.SiLU(inplace)
-
+    return nn.ReLU(inplace)
+    # return nn.SiLU(inplace)
 
 def Normalize(in_channels):
     return nn.GroupNorm(num_groups=32, num_channels=in_channels, eps=1e-6, affine=True)
@@ -131,18 +131,17 @@ class Block(nn.Module):
         super().__init__()
         self.proj = conv(dim_in, dim_out)
         self.act = act
-
+        # self.norm   = nn.BatchNorm2d(dim_out)
+        self.norm = nn.InstanceNorm2d(dim_out, affine=False)
     def forward(self, x, scale_shift=None):
         x = self.proj(x)
-
+        x = self.norm(x)
         if exists(scale_shift):
             scale, shift = scale_shift
             x = x * (scale + 1) + shift
 
         x = self.act(x)
         return x
-
-
 
 class ResBlock(nn.Module):
     def __init__(self, conv, dim_in, dim_out, time_emb_dim=None, act=NonLinearity()):
@@ -233,10 +232,13 @@ class Block3D(nn.Module):
     def __init__(self, conv, dim_in, dim_out, act=nn.SiLU()):
         super().__init__()
         self.proj = conv(dim_in, dim_out)
+        # self.norm   = nn.BatchNorm3d(dim_out)
+        self.norm = nn.InstanceNorm3d(dim_out, affine=False)
         self.act  = act
 
     def forward(self, x, scale_shift=None):
         x = self.proj(x)
+        x = self.norm(x)
         if scale_shift is not None:
             scale, shift = scale_shift
             x = x * (scale + 1) + shift

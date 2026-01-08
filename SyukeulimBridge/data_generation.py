@@ -18,9 +18,9 @@ def make_sensor_mask(
         mask = np.zeros((B, 1, T, X), dtype=bool)
 
         if n_sensors is not None:
-            for b in range(B):
-                x_idx = rng.choice(X, size=n_sensors, replace=False)
-                mask[b, 0, :, x_idx] = True
+            # for b in range(B):
+            x_idx = rng.choice(X, size=n_sensors, replace=False)
+            mask[:, 0, :, x_idx] = True
         else:
             if sparse_ratio is None:
                 raise ValueError("sparse_ratio cannot be None when n_sensors is None.")
@@ -156,52 +156,62 @@ def solve_burgers_1d(
     return U.astype(np.float32)
 
 def generate_dataset(
-    n_samples: int,
     nu: float = 0.01,
     Nx: int = 128,
     Nt: int = 128,
     T: float = 1.0,
     L: float = 1.0,
-    grf_m: float = 0.0,
-    grf_gamma: float = 2.0,
-    grf_tau: float = 5.0,
-    grf_sigma: float = 25.0,
     seed: int = 0,
+    U0: np.ndarray = None,
+    warmup_steps: int = 10,
 ) -> dict[str, np.ndarray]:
 
     rng = np.random.default_rng(seed)
 
-    x = np.linspace(0.0, L, Nx, endpoint=False).astype(np.float32)
-    t = np.linspace(0.0, T, Nt).astype(np.float32)
+    u0_provided = U0 is not None
+    if u0_provided:
+        U0_arr = np.asarray(U0, dtype=np.float32)
+    else:
+        U0_arr = np.zeros((1, 1, 1, Nx), dtype=np.float32)
 
-    U_full = np.zeros((n_samples, 1, Nt, Nx), dtype=np.float32)
-    U_obs  = np.zeros((n_samples, 1, Nt, Nx), dtype=np.float32)
-    U0     = np.zeros((n_samples, 1, 1, Nx), dtype=np.float32)
+    warmup = 0 if u0_provided else int(warmup_steps)
+
+    Nt_sim = Nt + warmup
+    U_full = np.zeros((1, 1, Nt, Nx), dtype=np.float32)
 
     grf_N = Nx // 2
 
-    for i in tqdm(range(n_samples)):
-        u0 = grf1_grid(
-            N=grf_N,
-            m=grf_m,
-            gamma=grf_gamma,
-            tau=grf_tau,
-            sigma=grf_sigma,
-            Nx=Nx,
-            rng=rng,
-        )
+    for i in tqdm(range(1)):
+        if u0_provided:
+            u0 = U0_arr[i, 0, 0].astype(np.float32, copy=False)
+        else:
+            u0 = grf1_grid(
+                N=grf_N,
+                m=0.0,
+                gamma=2.0,
+                tau=5.0,
+                sigma=25.0,
+                Nx=Nx,
+                rng=rng,
+            ).astype(np.float32, copy=False)
+            U0_arr[i, 0, 0] = u0
 
-        U = solve_burgers_1d(
+        if Nt > 1:
+            dt = T / (Nt - 1)
+            T_sim = dt * (Nt_sim - 1)
+        else:
+            T_sim = T
+
+        U_sim = solve_burgers_1d(
             u0=u0,
             nu=nu,
             Nx=Nx,
-            Nt=Nt,
-            T=T,
+            Nt=Nt_sim,
+            T=T_sim,
             L=L,
             dealias=True,
         )
 
-        U_full[i, 0] = U
-        U0[i, 0, 0]  = u0
+        U_full[i, 0] = U_sim[warmup : warmup + Nt]
 
     return U_full

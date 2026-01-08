@@ -75,12 +75,10 @@ class ConditionalUNet(nn.Module):
 
         block_class = functools.partial(ResBlock, conv=default_conv, act=NonLinearity())
 
-        # 입력은 x 하나만 받으므로 in_channels 그대로
-        self.init_conv = default_conv(in_channels, nf, 7)
+        self.init_conv = default_conv(in_channels, nf, 3)
 
         time_dim = condition_dim
 
-        # layers
         self.downs = nn.ModuleList([])
         self.ups = nn.ModuleList([])
 
@@ -100,9 +98,9 @@ class ConditionalUNet(nn.Module):
                 Upsample(dim_out, dim_in) if i != 0 else default_conv(dim_out, dim_in),
             ]))
 
-        mid_dim = nf * ch_mul[-1]
-        self.mid_block1 = block_class(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=time_dim)
-        self.mid_block2 = block_class(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=time_dim)
+        # mid_dim = nf * ch_mul[-1]
+        # self.mid_block1 = block_class(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=time_dim)
+        # self.mid_block2 = block_class(dim_in=mid_dim, dim_out=mid_dim, time_emb_dim=time_dim)
 
         self.final_res_block = block_class(dim_in=nf * 2, dim_out=nf, time_emb_dim=time_dim)
         self.final_conv = nn.Conv2d(nf, out_channels, 3, 1, 1)
@@ -123,15 +121,10 @@ class ConditionalUNet(nn.Module):
         elif cond.dim() != 2:
             raise ValueError(f"cond must be (B, condition_dim) or (B, condition_dim, 1, 1), got {cond.shape}")
 
-        # padding
         x_in = self.check_image_size(x, H, W)
-        # stem
         x0 = self.init_conv(x_in)
         x_skip0 = x0.clone()
-
-        # cond -> time embedding (ResBlock의 scale/shift에 쓰임)
         t = cond.to(x0.device)
-        # down
         h = []
         for b1, b2, downsample in self.downs:
             x0 = b1(x0, t)
@@ -141,11 +134,9 @@ class ConditionalUNet(nn.Module):
             h.append(x0)
             x0 = downsample(x0)
 
-        # mid
-        x0 = self.mid_block1(x0, t)
-        x0 = self.mid_block2(x0, t)
+        # x0 = self.mid_block1(x0, t)
+        # x0 = self.mid_block2(x0, t)
 
-        # up
         for b1, b2, upsample in self.ups:
             x0 = torch.cat([x0, h.pop()], dim=1)
             x0 = b1(x0, t)
@@ -153,12 +144,9 @@ class ConditionalUNet(nn.Module):
             x0 = b2(x0, t)
             x0 = upsample(x0)
 
-        # tail
         x0 = torch.cat([x0, x_skip0], dim=1)
         x0 = self.final_res_block(x0, t)
         out = self.final_conv(x0)
-        # 원래 H, W로 crop
-        # out = out[..., :H, :W]
         return out
 
 
@@ -183,7 +171,6 @@ class ConditionalUNet3D(nn.Module):
                 Downsample3d(dim_in, dim_out) if i != (depth-1) else default_conv3d(dim_in, dim_out, 3),
             ]))
 
-            # up path (reverse insert)
             self.ups.insert(0, nn.ModuleList([
                 block(dim_in=dim_out + dim_in, dim_out=dim_out, time_emb_dim=condition_dim),
                 block(dim_in=dim_out + dim_in, dim_out=dim_out, time_emb_dim=condition_dim),
@@ -198,7 +185,6 @@ class ConditionalUNet3D(nn.Module):
         self.final_conv = nn.Conv3d(nf, out_channels, 3, 1, 1)
 
     def forward(self, x, cond):
-        # x: (B,1,T,X,Y), cond: (B,cond_dim)
         if cond.dim() == 4:
             cond = cond.view(cond.size(0), -1)
         elif cond.dim() != 2:

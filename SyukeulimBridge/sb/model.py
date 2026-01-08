@@ -62,7 +62,7 @@ def _prepare_unet_input(low_data, high_data, mask_low, mask_high, device):
 
 
 class SB_model_ver1(object):
-    def __init__(self, dataloader, timepoints, time_dim=32, steps=60, eps_train=10, eps_test=10, base_lr=1e-3,save=False, decay=0.8, beta_min=0.1, beta_max=0.3, pde_type='kolmo'):
+    def __init__(self, dataloader, timepoints, time_dim=32, steps=60, eps_train=10, eps_test=10, base_lr=1e-3,save=False, decay=0.8, beta_min=0.01, beta_max=0.01, pde_type='kolmo'):
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.dataloader = dataloader
         self.timepoints = timepoints
@@ -92,39 +92,43 @@ class SB_model_ver1(object):
         self.decay = decay
         
         in_channel = 1
-        # 1d의 경우 1채널, 2d의 경우 B*T로 1채널로 만듬
         if self.pde_type == "burgers":
-            self.v_fore = sb.networks.ConditionalUNet(
+            # self.v_fore = sb.networks.ConditionalUNet(
+            #     condition_dim=time_dim,
+            #     in_channels=in_channel,
+            #     out_channels=in_channel,
+            #     nf=128,
+            #     ch_mul=(1, 2),
+            # ).to(self.device)
+            self.v_fore = sb.networks.SimpleUNet(
                 condition_dim=time_dim,
                 in_channels=in_channel,
                 out_channels=in_channel,
-                nf=32,
-                ch_mul=(1, 2, 4),
             ).to(self.device)
-
         elif self.pde_type == "kolmo":
             self.v_fore = sb.networks.ConditionalUNet3D( 
                 condition_dim=time_dim,
                 in_channels=in_channel,
                 out_channels=in_channel,
                 nf=1,       
-                ch_mul=(1,2),
+                ch_mul=(1, 2),
             ).to(self.device)
 
         self.time_embed = sb.networks.time_embedding(output_dim=time_dim).to(self.device)
 
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.time_embed.parameters()), lr=self.base_lr)
-        log_alpha_init = torch.empty(1).uniform_(np.log(1e-4), np.log(1e-2))
+        # log_alpha_init = torch.empty(1).uniform_(np.log(1e-4), np.log(1e-2))
+        log_alpha_init = torch.tensor(0.02, dtype=torch.float32, device=self.device)
         self.alpha = nn.Parameter(log_alpha_init.to(self.device))
-        self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr, momentum=0.5)
-        
+        # self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr, momentum=0.5)
+        self.alpha_optimizer = optim.AdamW([self.alpha], lr=1e-3, weight_decay=0.5)
         self.path = "model/"
         os.makedirs(self.path, exist_ok=True)
         
     def beta_t(self, t):
         return self.beta_min + t * (self.beta_max - self.beta_min)
     
-    def train(self, train_epochs=10000, loss_plot=True):
+    def train(self, train_epochs=10000):
         self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Alpha":[]}
 
         self.v_fore.train()
@@ -138,16 +142,20 @@ class SB_model_ver1(object):
             except StopIteration:
                 loader_it = iter(self.dataloader)
                 batch = next(loader_it)
-            self.optimizer_fore.zero_grad(set_to_none=True)
-            self.alpha_optimizer.zero_grad(set_to_none=True)
-            alpha = F.softplus(self.alpha)
+            self.optimizer_fore.zero_grad()
+            self.alpha_optimizer.zero_grad()
+            # alpha = F.softplus(self.alpha)
+            alpha = self.alpha
             x_0, x_1, mask_low, mask_high = batch
             x0_fixed, x1_fixed, mask, mode = _prepare_unet_input(x_0, x_1, mask_low, mask_high, self.device)
+            
             # print("x0_fixed", x0_fixed.shape)
             # print("x1_fixed", x1_fixed.shape)
-            x_1_hat_fixed = self.fwd_start_from_t(x_0=x0_fixed, x_1_fixed=x1_fixed, mask=mask, v_m=self.v_fore, t_m=self.time_embed, one_step=False)
+            x_1_hat_fixed = self.fwd_start_from_t(x_0=x0_fixed, x_1_fixed=x1_fixed, mask=mask, v_m=self.v_fore, t_m=self.time_embed, one_step=True)
+            
             # print("x_1_hat_fixed", x_1_hat_fixed.shape)
             x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0=x0_fixed, x_1=x_1_hat_fixed, forward=True)
+            x_t_fore = torch.where(mask, x1_fixed, x_t_fore)
             # print("x_t_fore", x_t_fore.shape)
             x_fore = self.v_fore(x_t_fore, self.time_embed(t_fore, 1))
             # print("x_fore", x_fore.shape)
@@ -162,23 +170,61 @@ class SB_model_ver1(object):
                 denom = unobs.sum().clamp_min(1)
                 loss_fore = (diff * unobs).sum() / denom
             x_1_hat = self.fwd_start_from_t(x_0=x_t_fore, x_1_fixed=x1_fixed, mask=mask, v_m=self.v_fore, t_m=self.time_embed, start_t=t_fore, one_step=False)
+            
             # print("x_1_hat", x_1_hat.shape)
             if self.pde_type == "kolmo":
                 pde_fore = self.phys_loss(x_1_hat.squeeze(1), coef=alpha)
-            else:
+            elif self.pde_type == "burgers":
                 pde_fore = self.phys_loss(x_1_hat, coef=alpha)
             # print(pde_fore)
-            loss = 1 * loss_fore + 1 * pde_fore
+            loss = 1 * pde_fore
             epoch_loss_fore = loss_fore
             epoch_pde_loss_fore = pde_fore
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1)
             torch.nn.utils.clip_grad_norm_(self.time_embed.parameters(), max_norm=1)
-            torch.nn.utils.clip_grad_norm_([self.alpha], max_norm=0.1)
+            # torch.nn.utils.clip_grad_norm_([self.alpha], max_norm=0.05)
             self.optimizer_fore.step()
-            self.alpha_optimizer.step()  
-            
+            self.alpha_optimizer.step()
+            if epoch % 1 == 0:
+                with torch.no_grad():
+                    self.finetuning_loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
+                    self.finetuning_loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
+                    self.finetuning_loss_history['Alpha'].append(alpha.item())
+                    
+            if self.save and epoch%100==0 and epoch!=0:
+                models_dict = {
+                    'v_fore': self.v_fore.state_dict(),
+                    'scale_m_fore': self.time_embed.state_dict(),
+                    }
+                torch.cuda.empty_cache()
+                clear_output(wait=True)
+                list1 = self.finetuning_loss_history['loss_fore']
+                x = range(len(list1))
+                plt.plot(x, list1, label='loss_fore')
+                plt.legend()
+                plt.show()
+                plt.close()
+                
+                list2 = self.finetuning_loss_history['PDE_loss_fore']
+                x = range(len(list2))
+                plt.plot(x, list2, label='PDE_loss_fore')
+                plt.legend()
+                plt.show()
+                plt.close()
+                
+                list3 = self.finetuning_loss_history['Alpha']
+                x = range(len(list3))
+                plt.plot(x, list3, label='Alpha')
+                plt.legend()
+                plt.show()
+                plt.close()
+            pbar.set_description('processed: %d' % (1 + epoch))
+            if True:
+                pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Alpha':alpha.detach().cpu().numpy()})
+                pbar.update(1)
+                
     def finetuning_load(self,model_path='finetuning_end.pt'):
         models_dict=torch.load(model_path)
         self.v_fore=copy.deepcopy(self.v_fore).train()
@@ -192,12 +238,10 @@ class SB_model_ver1(object):
         self.time_embed.eval()
 
         with torch.no_grad():
-            x0_fix, x1_fix, mask_fix, meta = self._infer_prepare(x_0, x_1, mask_low, mask_high)
-
+            x0_fix, x1_fix, mask_fix, mod = _prepare_unet_input(x_0, x_1, mask_low, mask_high, self.device)
             x_path_fix = self.fwd_inference(x0_fix=x0_fix, x1_fix=x1_fix, mask_fix=mask_fix, v_m=self.v_fore, t_m=self.time_embed, eps_test=eps_test)
-            x_path = self._infer_restore(x_path_fix, meta)
 
-            return x_path
+            return x_path_fix[-1]
 
     def Interp_t(self, x_0, x_1, forward=True):
         device = x_0.device
@@ -279,14 +323,13 @@ class SB_model_ver1(object):
         start_idx = start_idx.clamp(0, S - 1)
 
         if one_step:
-            t0 = t_list_stage[start_idx].view(Bp, 1)  
+            t0 = t_list_stage[start_idx].view(Bp, 1)
             y  = t_m(t0, t_ceil_stage)            
             drift = v_m(x_t, y)            
             nd = x_t.ndim
             remaining = (S - 1 - start_idx).to(dtype=dtype).view(Bp, 1, *([1] * (nd - 2)))
             scale = self.delta_t * remaining
             del_x = drift * scale
-
             x_t = x_t + del_x
             if mask is not None:
                 x_t = torch.where(mask, x_1_fixed, x_t)
@@ -302,7 +345,7 @@ class SB_model_ver1(object):
 
             act_idx = torch.nonzero(active, as_tuple=False).squeeze(1)
 
-            t_cur = t_list_stage[cur_idx[act_idx]].view(-1, 1)
+            t_cur = t_list_stage[cur_idx[act_idx]].view(-1, 1) 
             y = t_m(t_cur, t_ceil_stage)
             drift = v_m(x_t[act_idx], y)
 
@@ -311,7 +354,10 @@ class SB_model_ver1(object):
             scheduled_noise = self.beta_t(t_norm).view(-1, 1, *([1] * (nd - 2)))
 
             z = torch.randn_like(drift) * (self.delta_t ** 0.5)
-            del_x = drift * self.delta_t + (scheduled_noise ** 0.5) * z
+            if r == max_remain - 1:
+                del_x = drift * self.delta_t
+            else:
+                del_x = drift * self.delta_t + (scheduled_noise ** 0.5) * z
 
             x_t_act = x_t[act_idx] + del_x
             if mask is not None:
@@ -358,18 +404,7 @@ class SB_model_ver1(object):
             x_path.append(x_t.detach().cpu())
 
         return x_path
-    
-    def _infer_prepare(self, x0, x1, mask_low, mask_high):
-        x0_fix, x1_fix, mask_fix, mode = _prepare_unet_input(x0, x1, mask_low, mask_high, self.device)
-        meta = {"mode": mode, "orig_shape": x0.shape}   # 원본 (B,C,H,W)
-        meta["fix_shape"] = tuple(x0_fix.shape)         # 변환 후 (B,1,T,X,Y) or (B,1,T,X)
-        return x0_fix, x1_fix, mask_fix, meta
-
-
-    def _infer_restore(self, x_path, meta):
-        # x_path는 fwd_inference에서 이미 "fix shape" 기준으로 쌓인 경로
-        return x_path
-    
+        
     def apply_ema_to_model(self,model, ema_params):
         for name, param in model.named_parameters():
             ema_params[name].mul_(self.decay).add_(param, alpha=1 - self.decay)

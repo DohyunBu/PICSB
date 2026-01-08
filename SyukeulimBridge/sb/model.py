@@ -62,9 +62,11 @@ def _prepare_unet_input(low_data, high_data, mask_low, mask_high, device):
 
 
 class SB_model_ver1(object):
-    def __init__(self, dataloader, timepoints, time_dim=32, steps=60, eps_train=10, eps_test=10, base_lr=1e-3,save=False, decay=0.8, beta_min=0.01, beta_max=0.01, pde_type='kolmo'):
+    def __init__(self, train_dataloader, val_dataloader, timepoints, time_dim=32, steps=60, eps_train=10, eps_test=10, base_lr=1e-3,save=False, decay=0.8, beta_min=0.01, beta_max=0.01, pde_type='kolmo'):
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
-        self.dataloader = dataloader
+        self.train_dataloader = train_dataloader
+        self.val_dataloader = val_dataloader
+        self.best_val_pde = float("inf")
         self.timepoints = timepoints
         self.steps=steps
         self.eps_train=eps_train
@@ -128,19 +130,19 @@ class SB_model_ver1(object):
     def beta_t(self, t):
         return self.beta_min + t * (self.beta_max - self.beta_min)
     
-    def train(self, train_epochs=10000):
-        self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Alpha":[]}
+    def train(self, train_epochs=10000, model_name=None, known_alpha=None):
+        self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Val_PDE_loss":[], "Alpha":[]}
 
         self.v_fore.train()
         self.time_embed.train() 
-        loader_it = iter(self.dataloader)
+        loader_it = iter(self.train_dataloader)
 
         pbar = tqdm(range(train_epochs), desc="Train (1 batch per epoch)")
         for epoch in pbar:
             try:
                 batch = next(loader_it)
             except StopIteration:
-                loader_it = iter(self.dataloader)
+                loader_it = iter(self.train_dataloader)
                 batch = next(loader_it)
             self.optimizer_fore.zero_grad()
             self.alpha_optimizer.zero_grad()
@@ -172,10 +174,16 @@ class SB_model_ver1(object):
             x_1_hat = self.fwd_start_from_t(x_0=x_t_fore, x_1_fixed=x1_fixed, mask=mask, v_m=self.v_fore, t_m=self.time_embed, start_t=t_fore, one_step=False)
             
             # print("x_1_hat", x_1_hat.shape)
-            if self.pde_type == "kolmo":
-                pde_fore = self.phys_loss(x_1_hat.squeeze(1), coef=alpha)
-            elif self.pde_type == "burgers":
-                pde_fore = self.phys_loss(x_1_hat, coef=alpha)
+            if known_alpha is not None:
+                if self.pde_type == "kolmo":
+                    pde_fore = self.phys_loss(x_1_hat.squeeze(1), coef=known_alpha)
+                elif self.pde_type == "burgers":
+                    pde_fore = self.phys_loss(x_1_hat, coef=known_alpha)
+            else:
+                if self.pde_type == "kolmo":
+                    pde_fore = self.phys_loss(x_1_hat.squeeze(1), coef=alpha)
+                elif self.pde_type == "burgers":
+                    pde_fore = self.phys_loss(x_1_hat, coef=alpha)
             # print(pde_fore)
             loss = 1 * pde_fore
             epoch_loss_fore = loss_fore
@@ -184,29 +192,50 @@ class SB_model_ver1(object):
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1)
             torch.nn.utils.clip_grad_norm_(self.time_embed.parameters(), max_norm=1)
-            # torch.nn.utils.clip_grad_norm_([self.alpha], max_norm=0.05)
+            torch.nn.utils.clip_grad_norm_([self.alpha], max_norm=0.05)
             self.optimizer_fore.step()
             self.alpha_optimizer.step()
-            if epoch % 1 == 0:
+            do_val = (epoch % 100 == 0) or (epoch == train_epochs - 1)
+            if do_val:
+                val_pde_mean = None
+                self.v_fore.eval()
+                self.time_embed.eval()
                 with torch.no_grad():
-                    self.finetuning_loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
-                    self.finetuning_loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
-                    self.finetuning_loss_history['Alpha'].append(alpha.item())
+                    pde_val = 0.0
+                    cnt = 0
+                    for vb in self.val_dataloader:
+                        vx_0, vx_1, vmask_low, vmask_high = vb
                     
-            if self.save and epoch%100==0 and epoch!=0:
-                models_dict = {
-                    'v_fore': self.v_fore.state_dict(),
-                    'scale_m_fore': self.time_embed.state_dict(),
-                    }
-                torch.cuda.empty_cache()
-                clear_output(wait=True)
-                list1 = self.finetuning_loss_history['loss_fore']
-                x = range(len(list1))
-                plt.plot(x, list1, label='loss_fore')
-                plt.legend()
-                plt.show()
-                plt.close()
+                        vx_1_hat = self.eval_fore(x_0=vx_0, x_1=vx_1, mask_low=vmask_low, mask_high=vmask_high)
+                        alpha_val = F.softplus(self.alpha)
+                        if self.pde_type == "kolmo":
+                            vpde = self.phys_loss(vx_1_hat.squeeze(1), coef=alpha_val)
+                        elif self.pde_type == "burgers":
+                            vpde = self.phys_loss(vx_1_hat, coef=alpha_val)
+                        pde_val += float(vpde.detach().cpu().item())
+                        cnt += 1
+                    val_pde_mean = pde_val / max(cnt, 1)
+
+                    if val_pde_mean < self.best_val_pde:
+                        self.best_val_pde = val_pde_mean
+                        models_dict = {
+                            'v_fore': self.v_fore.state_dict(),
+                            'time_embed': self.time_embed.state_dict(),
+                            'alpha': self.alpha.detach().cpu(),
+                            'best_val_pde': self.best_val_pde,
+                        }
+                        torch.save(models_dict, os.path.join(self.path, model_name))
+                self.finetuning_loss_history['Val_PDE_loss'].append(val_pde_mean)
+                self.v_fore.train()
+                self.time_embed.train()
+            with torch.no_grad():
+                self.finetuning_loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
+                self.finetuning_loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
+                self.finetuning_loss_history['Alpha'].append(alpha.item())
                 
+            if epoch%100==0 and epoch!=0:
+                torch.cuda.empty_cache()
+                clear_output(wait=True)            
                 list2 = self.finetuning_loss_history['PDE_loss_fore']
                 x = range(len(list2))
                 plt.plot(x, list2, label='PDE_loss_fore')
@@ -220,9 +249,16 @@ class SB_model_ver1(object):
                 plt.legend()
                 plt.show()
                 plt.close()
+                
+                list4 = self.finetuning_loss_history['Val_PDE_loss']
+                x = range(len(list4))
+                plt.plot(x, list4, label='Val_PDE_loss')
+                plt.legend()
+                plt.show()
+                plt.close()
             pbar.set_description('processed: %d' % (1 + epoch))
             if True:
-                pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Alpha':alpha.detach().cpu().numpy()})
+                pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Val_PDE_loss':val_pde_mean, 'Alpha':alpha.detach().cpu().numpy()})
                 pbar.update(1)
                 
     def finetuning_load(self,model_path='finetuning_end.pt'):
@@ -239,9 +275,9 @@ class SB_model_ver1(object):
 
         with torch.no_grad():
             x0_fix, x1_fix, mask_fix, mod = _prepare_unet_input(x_0, x_1, mask_low, mask_high, self.device)
-            x_path_fix = self.fwd_inference(x0_fix=x0_fix, x1_fix=x1_fix, mask_fix=mask_fix, v_m=self.v_fore, t_m=self.time_embed, eps_test=eps_test)
+            x_last = self.fwd_inference(x0_fix=x0_fix, x1_fix=x1_fix, mask_fix=mask_fix, v_m=self.v_fore, t_m=self.time_embed, eps_test=eps_test)
 
-            return x_path_fix[-1]
+            return x_last
 
     def Interp_t(self, x_0, x_1, forward=True):
         device = x_0.device
@@ -384,7 +420,6 @@ class SB_model_ver1(object):
         Bp = x_t.shape[0]
         nd = x_t.ndim
         shape = (Bp, 1) + (1,) * (nd - 2)
-        x_path = [x_t.detach().cpu()]
 
         for t_new in t_list_stage[:-1]:
             t = t_new.to(device=device, dtype=dtype).expand(Bp, 1)
@@ -401,9 +436,8 @@ class SB_model_ver1(object):
             x_t = x_t + del_x
             if mask is not None:
                 x_t = torch.where(mask, x1, x_t)
-            x_path.append(x_t.detach().cpu())
 
-        return x_path
+        return x_t
         
     def apply_ema_to_model(self,model, ema_params):
         for name, param in model.named_parameters():

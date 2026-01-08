@@ -156,6 +156,7 @@ def solve_burgers_1d(
     return U.astype(np.float32)
 
 def generate_dataset(
+    n_samples: int =40,
     nu: float = 0.01,
     Nx: int = 128,
     Nt: int = 128,
@@ -172,16 +173,15 @@ def generate_dataset(
     if u0_provided:
         U0_arr = np.asarray(U0, dtype=np.float32)
     else:
-        U0_arr = np.zeros((1, 1, 1, Nx), dtype=np.float32)
-
+        U0_arr = np.zeros((n_samples, 1, 1, Nx), dtype=np.float32)
     warmup = 0 if u0_provided else int(warmup_steps)
 
     Nt_sim = Nt + warmup
-    U_full = np.zeros((1, 1, Nt, Nx), dtype=np.float32)
+    U_full = np.zeros((n_samples, 1, Nt, Nx), dtype=np.float32)
 
     grf_N = Nx // 2
 
-    for i in tqdm(range(1)):
+    for i in tqdm(range(n_samples)):
         if u0_provided:
             u0 = U0_arr[i, 0, 0].astype(np.float32, copy=False)
         else:

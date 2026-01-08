@@ -97,8 +97,8 @@ class SB_model_ver1(object):
             #     condition_dim=time_dim,
             #     in_channels=in_channel,
             #     out_channels=in_channel,
-            #     nf=128,
-            #     ch_mul=(1, 2),
+            #     nf=256,
+            #     ch_mul=(1, 2, 4),
             # ).to(self.device)
             self.v_fore = sb.networks.SimpleUNet(
                 condition_dim=time_dim,
@@ -118,10 +118,10 @@ class SB_model_ver1(object):
 
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.time_embed.parameters()), lr=self.base_lr)
         # log_alpha_init = torch.empty(1).uniform_(np.log(1e-4), np.log(1e-2))
-        log_alpha_init = torch.tensor(0.02, dtype=torch.float32, device=self.device)
+        log_alpha_init = torch.tensor(-5, dtype=torch.float32, device=self.device)
         self.alpha = nn.Parameter(log_alpha_init.to(self.device))
         # self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr, momentum=0.5)
-        self.alpha_optimizer = optim.AdamW([self.alpha], lr=1e-3, weight_decay=0.5)
+        self.alpha_optimizer = optim.AdamW([self.alpha], lr=1e-3, weight_decay=0.0)
         self.path = "model/"
         os.makedirs(self.path, exist_ok=True)
         
@@ -144,8 +144,8 @@ class SB_model_ver1(object):
                 batch = next(loader_it)
             self.optimizer_fore.zero_grad()
             self.alpha_optimizer.zero_grad()
-            # alpha = F.softplus(self.alpha)
-            alpha = self.alpha
+            alpha = F.softplus(self.alpha)
+            # alpha = self.alpha
             x_0, x_1, mask_low, mask_high = batch
             x0_fixed, x1_fixed, mask, mode = _prepare_unet_input(x_0, x_1, mask_low, mask_high, self.device)
             

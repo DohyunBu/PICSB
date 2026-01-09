@@ -235,27 +235,27 @@ class SB_model_ver1(object):
                 
             if epoch%100==0 and epoch!=0:
                 torch.cuda.empty_cache()
-                clear_output(wait=True)            
-                list2 = self.finetuning_loss_history['PDE_loss_fore']
-                x = range(len(list2))
-                plt.plot(x, list2, label='PDE_loss_fore')
-                plt.legend()
-                plt.show()
-                plt.close()
+                # clear_output(wait=True)            
+                # list2 = self.finetuning_loss_history['PDE_loss_fore']
+                # x = range(len(list2))
+                # plt.plot(x, list2, label='PDE_loss_fore')
+                # plt.legend()
+                # plt.show()
+                # plt.close()
                 
-                list3 = self.finetuning_loss_history['Alpha']
-                x = range(len(list3))
-                plt.plot(x, list3, label='Alpha')
-                plt.legend()
-                plt.show()
-                plt.close()
+                # list3 = self.finetuning_loss_history['Alpha']
+                # x = range(len(list3))
+                # plt.plot(x, list3, label='Alpha')
+                # plt.legend()
+                # plt.show()
+                # plt.close()
                 
-                list4 = self.finetuning_loss_history['Val_PDE_loss']
-                x = range(len(list4))
-                plt.plot(x, list4, label='Val_PDE_loss')
-                plt.legend()
-                plt.show()
-                plt.close()
+                # list4 = self.finetuning_loss_history['Val_PDE_loss']
+                # x = range(len(list4))
+                # plt.plot(x, list4, label='Val_PDE_loss')
+                # plt.legend()
+                # plt.show()
+                # plt.close()
             pbar.set_description('processed: %d' % (1 + epoch))
             if True:
                 pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Val_PDE_loss':val_pde_mean, 'Alpha':alpha.detach().cpu().numpy()})

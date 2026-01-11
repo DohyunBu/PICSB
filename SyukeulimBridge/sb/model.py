@@ -131,11 +131,6 @@ class SB_model_ver1(object):
         self.time_embed = sb.networks.time_embedding(output_dim=time_dim).to(self.device)
 
         self.optimizer_fore = optim.Adam(list(self.v_fore.parameters())+list(self.time_embed.parameters()), lr=self.base_lr)
-        # log_alpha_init = torch.empty(1).uniform_(np.log(1e-4), np.log(1e-2))
-        log_alpha_init = torch.tensor(-5, dtype=torch.float32, device=self.device)
-        self.alpha = nn.Parameter(log_alpha_init.to(self.device))
-        # self.alpha_optimizer = optim.SGD([self.alpha], lr=self.base_lr, momentum=0.5)
-        self.alpha_optimizer = optim.AdamW([self.alpha], lr=1e-3, weight_decay=0.0)
         self.path = "model/"
         os.makedirs(self.path, exist_ok=True)
         
@@ -143,7 +138,7 @@ class SB_model_ver1(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
     
     def train(self, train_epochs=10000, model_name=None, known_alpha=None):
-        self.loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Val_PDE_loss":[], "Alpha":[]}
+        self.loss_history={"PDE_loss_fore":[], "Val_PDE_loss":[]}
 
         self.v_fore.train()
         self.time_embed.train() 
@@ -157,56 +152,32 @@ class SB_model_ver1(object):
                 loader_it = iter(self.train_dataloader)
                 batch = next(loader_it)
             self.optimizer_fore.zero_grad()
-            self.alpha_optimizer.zero_grad()
-            alpha = F.softplus(self.alpha)
             # alpha = self.alpha
             x_0, x_1, mask_low, mask_high = batch
             x0_fixed, x1_fixed, mask, mode = _prepare_unet_input(x_0, x_1, mask_low, mask_high, self.device)
             
             # print("x0_fixed", x0_fixed.shape)
             # print("x1_fixed", x1_fixed.shape)
-            x_1_hat_fixed = self.fwd_start_from_t(x_0=x0_fixed, x_1_fixed=x1_fixed, mask=mask, v_m=self.v_fore, t_m=self.time_embed, one_step=True)
+            x_1_hat_fixed = self.fwd_start_from_t(x_0=x0_fixed, x_1_fixed=x1_fixed, mask=mask, v_m=self.v_fore, t_m=self.time_embed, one_step=False)
             
             # print("x_1_hat_fixed", x_1_hat_fixed.shape)
             x_t_fore, t_fore, t_ceil, t_floor = self.Interp_t(x_0=x0_fixed, x_1=x_1_hat_fixed, forward=True)
             x_t_fore = torch.where(mask, x1_fixed, x_t_fore)
-            # print("x_t_fore", x_t_fore.shape)
-            x_fore = self.v_fore(x_t_fore, self.time_embed(t_fore, 1))
-            # print("x_fore", x_fore.shape)
-            nd = x_t_fore.ndim
-            den_shape = (x0_fixed.shape[0], 1) + (1,) * (nd - 2)
-            target_fore = (x1_fixed - x_t_fore) / (t_ceil - t_fore).view(*den_shape)
-            if mask is None:
-                loss_fore = (x_fore - target_fore).abs().mean()
-            else:
-                unobs = (~mask.bool())
-                diff = (x_fore - target_fore).abs()
-                denom = unobs.sum().clamp_min(1)
-                loss_fore = (diff * unobs).sum() / denom
+
             x_1_hat = self.fwd_start_from_t(x_0=x_t_fore, x_1_fixed=x1_fixed, mask=mask, v_m=self.v_fore, t_m=self.time_embed, start_t=t_fore, one_step=False)
             
-            # print("x_1_hat", x_1_hat.shape)
-            if known_alpha is not None:
-                if self.pde_type == "kolmo":
-                    pde_fore = self.phys_loss(x_1_hat, coef=known_alpha)
-                elif self.pde_type == "burgers":
-                    pde_fore = self.phys_loss(x_1_hat, coef=known_alpha)
-            else:
-                if self.pde_type == "kolmo":
-                    pde_fore = self.phys_loss(x_1_hat, coef=alpha)
-                elif self.pde_type == "burgers":
-                    pde_fore = self.phys_loss(x_1_hat, coef=alpha)
-            # print(pde_fore)
+            if self.pde_type == "kolmo":
+                pde_fore = self.phys_loss(x_1_hat, coef=known_alpha)
+            elif self.pde_type == "burgers":
+                pde_fore = self.phys_loss(x_1_hat, coef=known_alpha)
+            
             loss = 1 * pde_fore
-            epoch_loss_fore = loss_fore
             epoch_pde_loss_fore = pde_fore
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1)
             torch.nn.utils.clip_grad_norm_(self.time_embed.parameters(), max_norm=1)
-            torch.nn.utils.clip_grad_norm_([self.alpha], max_norm=0.05)
             self.optimizer_fore.step()
-            self.alpha_optimizer.step()
             do_val = (epoch % 100000 == 0) or (epoch == train_epochs - 1)
             if do_val and self.val_dataloader is not None:
                 val_pde_mean = None
@@ -219,11 +190,10 @@ class SB_model_ver1(object):
                         vx_0, vx_1, vmask_low, vmask_high = vb
                     
                         vx_1_hat = self.eval_fore(x_0=vx_0, x_1=vx_1, mask_low=vmask_low, mask_high=vmask_high)
-                        alpha_val = F.softplus(self.alpha)
                         if self.pde_type == "kolmo":
-                            vpde = self.phys_loss(vx_1_hat, coef=alpha_val)
+                            vpde = self.phys_loss(vx_1_hat, coef=known_alpha)
                         elif self.pde_type == "burgers":
-                            vpde = self.phys_loss(vx_1_hat, coef=alpha_val)
+                            vpde = self.phys_loss(vx_1_hat, coef=known_alpha)
                         pde_val += float(vpde.detach().cpu().item())
                         cnt += 1
                     val_pde_mean = pde_val / max(cnt, 1)
@@ -234,7 +204,6 @@ class SB_model_ver1(object):
                             'v_fore': self.v_fore.state_dict(),
                             'time_embed': self.time_embed.state_dict(),
                             'optimizer_fore': self.optimizer_fore.state_dict(),
-                            'alpha': self.alpha.detach().cpu(),
                             'best_val_pde': self.best_val_pde,
                             'loss_history': self.loss_history                            
                         }
@@ -243,9 +212,7 @@ class SB_model_ver1(object):
                 self.v_fore.train()
                 self.time_embed.train()
             with torch.no_grad():
-                self.loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
                 self.loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
-                self.loss_history['Alpha'].append(alpha.item())
                 
             if epoch%100==0 and epoch!=0:
                 torch.cuda.empty_cache()
@@ -257,13 +224,6 @@ class SB_model_ver1(object):
                 plt.show()
                 plt.close()
                 
-                # list3 = self.loss_history['Alpha']
-                # x = range(len(list3))
-                # plt.plot(x, list3, label='Alpha')
-                # plt.legend()
-                # plt.show()
-                # plt.close()
-                
                 list4 = self.loss_history['Val_PDE_loss']
                 x = range(len(list4))
                 plt.plot(x, list4, label='Val_PDE_loss')
@@ -274,14 +234,13 @@ class SB_model_ver1(object):
                     'v_fore': self.v_fore.state_dict(),
                     'time_embed': self.time_embed.state_dict(),
                     'optimizer_fore': self.optimizer_fore.state_dict(),
-                    'alpha': self.alpha.detach().cpu(),
                     'best_val_pde': self.best_val_pde,
                     'loss_history': self.loss_history                            
                 }
                 torch.save(models_dict, os.path.join(self.path, model_name))
             pbar.set_description('processed: %d' % (1 + epoch))
 
-            pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Val_PDE_loss':val_pde_mean, 'Alpha':alpha.detach().cpu().numpy()})
+            pbar.set_postfix({'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Val_PDE_loss':val_pde_mean})
             pbar.update(1)
                 
     def finetuning_load(self,model_path='finetuning_end.pt'):

@@ -43,26 +43,33 @@ def _prepare_unet_input(low_data, high_data, mask_low, mask_high, device):
 
     # 2d case: input comes as (B,T,X,Y) encoded as (B,C,H,W) with C=T
     # Keep time axis: convert to (B,1,T,X,Y)
-    T = C
-    X = H
-    Y = W
+    mask_ = mask_high
+    if mask_ is not None:
+        x1_fixed = (high_data * mask_).detach()
+        low_data  = torch.where(mask_, x1_fixed, low_data)
+        high_data = torch.where(mask_, x1_fixed, high_data)
 
-    low_  = low_data.view(B, T, X, Y).unsqueeze(1)      # (B,1,T,X,Y)
-    high_ = high_data.view(B, T, X, Y).unsqueeze(1)     # (B,1,T,X,Y)
-    mask_ = None
-    if mask_high is not None:
-        mask_ = mask_high.view(B, T, X, Y).unsqueeze(1) # (B,1,T,X,Y)
+    return low_data, high_data, mask_, "2d_time_as_channel"
+    # T = C
+    # X = H
+    # Y = W
 
-        x1_fixed = (high_ * mask_).detach()
-        low_  = torch.where(mask_, x1_fixed, low_)
-        high_ = torch.where(mask_, x1_fixed, high_)
+    # low_  = low_data.view(B, T, X, Y).unsqueeze(1)      # (B,1,T,X,Y)
+    # high_ = high_data.view(B, T, X, Y).unsqueeze(1)     # (B,1,T,X,Y)
+    # mask_ = None
+    # if mask_high is not None:
+    #     mask_ = mask_high.view(B, T, X, Y).unsqueeze(1) # (B,1,T,X,Y)
 
-    return low_, high_, mask_, "2d"
+    #     x1_fixed = (high_ * mask_).detach()
+    #     low_  = torch.where(mask_, x1_fixed, low_)
+    #     high_ = torch.where(mask_, x1_fixed, high_)
+
+    # return low_, high_, mask_, "2d"
 
 
 
 class SB_model_ver1(object):
-    def __init__(self, train_dataloader, val_dataloader, timepoints, time_dim=32, steps=60, eps_train=10, eps_test=10, base_lr=1e-3,save=False, decay=0.8, beta_min=0.01, beta_max=0.01, pde_type='kolmo'):
+    def __init__(self, train_dataloader, timepoints, val_dataloader=None, time_dim=32, steps=60, eps_train=10, eps_test=10, base_lr=1e-3,save=False, decay=0.8, beta_min=0.01, beta_max=0.01, pde_type='kolmo'):
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
@@ -108,13 +115,18 @@ class SB_model_ver1(object):
                 out_channels=in_channel,
             ).to(self.device)
         elif self.pde_type == "kolmo":
-            self.v_fore = sb.networks.ConditionalUNet3D( 
+            self.v_fore = sb.networks.SimpleUNet(
                 condition_dim=time_dim,
-                in_channels=in_channel,
-                out_channels=in_channel,
-                nf=1,       
-                ch_mul=(1, 2),
+                in_channels=40,
+                out_channels=40,
             ).to(self.device)
+            # self.v_fore = sb.networks.ConditionalUNet3D( 
+            #     condition_dim=time_dim,
+            #     in_channels=in_channel,
+            #     out_channels=in_channel,
+            #     nf=4,       
+            #     ch_mul=(1, 2, 4),
+            # ).to(self.device)
 
         self.time_embed = sb.networks.time_embedding(output_dim=time_dim).to(self.device)
 
@@ -131,7 +143,7 @@ class SB_model_ver1(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
     
     def train(self, train_epochs=10000, model_name=None, known_alpha=None):
-        self.finetuning_loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Val_PDE_loss":[], "Alpha":[]}
+        self.loss_history={'loss':[], "loss_fore":[], "PDE_loss_fore":[], "Val_PDE_loss":[], "Alpha":[]}
 
         self.v_fore.train()
         self.time_embed.train() 
@@ -176,12 +188,12 @@ class SB_model_ver1(object):
             # print("x_1_hat", x_1_hat.shape)
             if known_alpha is not None:
                 if self.pde_type == "kolmo":
-                    pde_fore = self.phys_loss(x_1_hat.squeeze(1), coef=known_alpha)
+                    pde_fore = self.phys_loss(x_1_hat, coef=known_alpha)
                 elif self.pde_type == "burgers":
                     pde_fore = self.phys_loss(x_1_hat, coef=known_alpha)
             else:
                 if self.pde_type == "kolmo":
-                    pde_fore = self.phys_loss(x_1_hat.squeeze(1), coef=alpha)
+                    pde_fore = self.phys_loss(x_1_hat, coef=alpha)
                 elif self.pde_type == "burgers":
                     pde_fore = self.phys_loss(x_1_hat, coef=alpha)
             # print(pde_fore)
@@ -195,8 +207,8 @@ class SB_model_ver1(object):
             torch.nn.utils.clip_grad_norm_([self.alpha], max_norm=0.05)
             self.optimizer_fore.step()
             self.alpha_optimizer.step()
-            do_val = (epoch % 100 == 0) or (epoch == train_epochs - 1)
-            if do_val:
+            do_val = (epoch % 100000 == 0) or (epoch == train_epochs - 1)
+            if do_val and self.val_dataloader is not None:
                 val_pde_mean = None
                 self.v_fore.eval()
                 self.time_embed.eval()
@@ -209,7 +221,7 @@ class SB_model_ver1(object):
                         vx_1_hat = self.eval_fore(x_0=vx_0, x_1=vx_1, mask_low=vmask_low, mask_high=vmask_high)
                         alpha_val = F.softplus(self.alpha)
                         if self.pde_type == "kolmo":
-                            vpde = self.phys_loss(vx_1_hat.squeeze(1), coef=alpha_val)
+                            vpde = self.phys_loss(vx_1_hat, coef=alpha_val)
                         elif self.pde_type == "burgers":
                             vpde = self.phys_loss(vx_1_hat, coef=alpha_val)
                         pde_val += float(vpde.detach().cpu().item())
@@ -221,45 +233,56 @@ class SB_model_ver1(object):
                         models_dict = {
                             'v_fore': self.v_fore.state_dict(),
                             'time_embed': self.time_embed.state_dict(),
+                            'optimizer_fore': self.optimizer_fore.state_dict(),
                             'alpha': self.alpha.detach().cpu(),
                             'best_val_pde': self.best_val_pde,
+                            'loss_history': self.loss_history                            
                         }
                         torch.save(models_dict, os.path.join(self.path, model_name))
-                self.finetuning_loss_history['Val_PDE_loss'].append(val_pde_mean)
+                self.loss_history['Val_PDE_loss'].append(val_pde_mean)
                 self.v_fore.train()
                 self.time_embed.train()
             with torch.no_grad():
-                self.finetuning_loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
-                self.finetuning_loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
-                self.finetuning_loss_history['Alpha'].append(alpha.item())
+                self.loss_history['loss_fore'].append(np.log1p(epoch_loss_fore.item()))
+                self.loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
+                self.loss_history['Alpha'].append(alpha.item())
                 
             if epoch%100==0 and epoch!=0:
                 torch.cuda.empty_cache()
-                # clear_output(wait=True)            
-                # list2 = self.finetuning_loss_history['PDE_loss_fore']
-                # x = range(len(list2))
-                # plt.plot(x, list2, label='PDE_loss_fore')
-                # plt.legend()
-                # plt.show()
-                # plt.close()
+                clear_output(wait=True)            
+                list2 = self.loss_history['PDE_loss_fore']
+                x = range(len(list2))
+                plt.plot(x, list2, label='PDE_loss_fore')
+                plt.legend()
+                plt.show()
+                plt.close()
                 
-                # list3 = self.finetuning_loss_history['Alpha']
+                # list3 = self.loss_history['Alpha']
                 # x = range(len(list3))
                 # plt.plot(x, list3, label='Alpha')
                 # plt.legend()
                 # plt.show()
                 # plt.close()
                 
-                # list4 = self.finetuning_loss_history['Val_PDE_loss']
-                # x = range(len(list4))
-                # plt.plot(x, list4, label='Val_PDE_loss')
-                # plt.legend()
-                # plt.show()
-                # plt.close()
+                list4 = self.loss_history['Val_PDE_loss']
+                x = range(len(list4))
+                plt.plot(x, list4, label='Val_PDE_loss')
+                plt.legend()
+                plt.show()
+                plt.close()
+                models_dict = {
+                    'v_fore': self.v_fore.state_dict(),
+                    'time_embed': self.time_embed.state_dict(),
+                    'optimizer_fore': self.optimizer_fore.state_dict(),
+                    'alpha': self.alpha.detach().cpu(),
+                    'best_val_pde': self.best_val_pde,
+                    'loss_history': self.loss_history                            
+                }
+                torch.save(models_dict, os.path.join(self.path, model_name))
             pbar.set_description('processed: %d' % (1 + epoch))
-            if True:
-                pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Val_PDE_loss':val_pde_mean, 'Alpha':alpha.detach().cpu().numpy()})
-                pbar.update(1)
+
+            pbar.set_postfix({'MSE_observed':epoch_loss_fore.detach().cpu().numpy(), 'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Val_PDE_loss':val_pde_mean, 'Alpha':alpha.detach().cpu().numpy()})
+            pbar.update(1)
                 
     def finetuning_load(self,model_path='finetuning_end.pt'):
         models_dict=torch.load(model_path)
@@ -357,11 +380,11 @@ class SB_model_ver1(object):
 
         start_idx = torch.searchsorted(t_list_stage, start_t.squeeze(1), right=False) 
         start_idx = start_idx.clamp(0, S - 1)
-
+        
         if one_step:
             t0 = t_list_stage[start_idx].view(Bp, 1)
             y  = t_m(t0, t_ceil_stage)            
-            drift = v_m(x_t, y)            
+            drift = v_m(x_t, y)  
             nd = x_t.ndim
             remaining = (S - 1 - start_idx).to(dtype=dtype).view(Bp, 1, *([1] * (nd - 2)))
             scale = self.delta_t * remaining

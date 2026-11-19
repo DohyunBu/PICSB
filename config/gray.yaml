@@ -1,0 +1,33 @@
+dataset: gray
+regime: sparse
+seed: 0
+
+timepoints: [0, 1]
+time_dim: 8
+steps: 10
+base_lr: 0.0001
+beta_min: 0.01
+beta_max: 0.01
+known_alpha:
+  delta_a: 0.00002
+  delta_b: 0.00001
+  feed: 0.098
+  kill: 0.057
+  t1: 630.0
+iterations: 100000
+refresh: 100
+batch_size: 8
+val_batch_size: 4
+shuffle: true
+
+train_ratio: 0.4
+
+high_path: "./benchmarks/gray/gray_high_f_1d_down.npy"
+low_path: "./benchmarks/gray/gray_low_f_1d_down_sparse.npy"
+mask_path: "./benchmarks/gray/gray_mask_high_1d_sparse.npy"
+model_path: "./Result/model/gray_100_10_1e2_sparse.pt"
+save_dir: "Result/model"
+model_name: "gray_100_10_1e2_sparse.pt"
+
+mask_n_sensors: 410
+mask_sparse_ratio: 0.1

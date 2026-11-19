@@ -1,0 +1,25 @@
+dataset: darcy
+regime: sparse
+seed: 0
+
+known_alpha: null       
+   
+timepoints: [0, 1]
+time_dim: 8
+steps: 10
+base_lr: 0.000001
+beta_min: 0.000001
+beta_max: 0.000001       
+iterations: 10000
+refresh: 100
+batch_size: 4
+shuffle: True
+
+a_path: "./benchmarks/darcy/lognorm_a_data.npy"
+p_path: "./benchmarks/darcy/lognorm_p_data.npy"
+model_path: "./Result/model/darcy.pt"
+save_dir: "Result/model"
+model_name: "darcy.pt"
+
+mask_n_sensors: 1536    # 128*12
+mask_sparse_ratio: 0.1

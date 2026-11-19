@@ -1,0 +1,28 @@
+dataset: burgers
+regime: sparse
+seed: 0
+
+timepoints: [0, 1]
+time_dim: 8
+steps: 10
+base_lr: 0.0001
+beta_min: 0.01
+beta_max: 0.01
+known_alpha: 0.01          
+iterations: 100000
+batch_size: 8
+val_batch_size: 4
+shuffle: false
+      
+mask_sparse_ratio: 0.1
+
+burgers_high_resol: 0.01 
+burgers_low_resol: 0.1     
+burgers_high_nx: 512
+burgers_high_nt: 512
+burgers_low_nx: 128
+burgers_low_nt: 128
+burgers_warmup: 100
+burgers_seed_high: 0
+burgers_seed_low: 20
+burgers_samples: 40

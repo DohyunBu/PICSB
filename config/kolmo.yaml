@@ -1,0 +1,25 @@
+dataset: kolmo
+regime: sparse
+seed: 0
+
+timepoints: [0, 1]
+time_dim: 8
+steps: 10
+base_lr: 0.001
+beta_min: 0.01
+beta_max: 0.01
+known_alpha: 1000         
+iterations: 100000
+refresh: 100
+batch_size: 4
+shuffle: True
+
+high_path : "benchmarks/kolmo/kf_2d_re1000_256_40seed.npy"
+low_path : "benchmarks/kolmo/low_fidelity_10%_sparse.npy"
+
+model_path: "./Result/model/kolmo.pt"
+save_dir: "Result/model"
+model_name: "kolmo.pt"
+
+mask_n_sensors: 6400 # (256*25)       
+mask_sparse_ratio: 0.1

@@ -1,0 +1,29 @@
+dataset: reaction_diffusion
+regime: sparse
+seed: 0
+
+timepoints: [0, 1]
+time_dim: 8
+steps: 10
+base_lr: 0.0001
+beta_min: 0.0000001
+beta_max: 0.0000001
+known_alpha:
+  nu: 5.0
+  rho: 5.0
+iterations: 100000
+refresh: 100
+batch_size: 8
+val_batch_size: 4
+shuffle: true
+
+train_ratio: 0.4
+val_ratio: 0.1
+
+high_path: "./benchmarks/RD/ReacDiff_Nu5.0_Rho5.0.hdf5"
+low_path: "./benchmarks/RD/low_f_1d.npy"
+model_path: "./Result/model/RD_100_10_1e7.pt"
+save_dir: "Result/model"
+model_name: "RD_100_10_1e7.pt"
+
+mask_sparse_ratio: 0.1

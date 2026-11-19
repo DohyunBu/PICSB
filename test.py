@@ -1,12 +1,12 @@
 import argparse
 from pathlib import Path
 import torch
+import torch.nn.functional as F
 import numpy as np
-import h5py
 from models.model import PICSB
 from models.preprocessing import dataset_interpolation
 from models.visualize import save_field_snapshot
-from models.data_generation import make_sensor_mask
+from models.data_generation import generate_dataset, make_sensor_mask
 from models.metrics import eval_metrics
 from datasets.dataset import PDEPairDataset
 from torch.utils.data import DataLoader
@@ -34,6 +34,7 @@ def parse_args():
     p.add_argument("--force_cpu", action="store_true", default=None)
     p.add_argument("--max_test_samples", type=int, default=None)
     p.add_argument("--fold-idx", type=int, default=0)
+    p.add_argument("--lf-grid", type=int, choices=[16, 32], default=None)
     return p.parse_args()
 
 def _to_metric_tensor(x, dataset):
@@ -71,6 +72,12 @@ def main():
         cfg["model_path"] = cfg.get("model_path") or "./Result/model/gray_100_10_1e2_sparse.pt"
     if cfg.get("model_path") is None:
         cfg["model_path"] = str(Path(cfg["save_dir"]) / cfg["model_name"])
+    if cfg["dataset"] == "kolmo" and cli.model_path is None:
+        model_path = Path(cfg["model_path"])
+        fold_suffix = f"_fold{int(cfg.get('fold_idx', 0))}"
+        if not model_path.stem.endswith(fold_suffix):
+            model_path = model_path.with_name(f"{model_path.stem}{fold_suffix}{model_path.suffix}")
+        cfg["model_path"] = str(model_path)
     if cfg.get("force_cpu"):
         torch.cuda.is_available = lambda: False
     set_seed(cfg["seed"])
@@ -89,12 +96,13 @@ def main():
         mask_high = np.concatenate([mask_high_p, mask_high_p], axis=1)
 
         N_train = 32
-        N_val = 8
-        low_test = low[N_train + N_val:]
-        high_test = high[N_train + N_val:]
-        mask_test = mask_high[N_train + N_val:]
+        N_skip = 8
+        low_test = low[N_train + N_skip:]
+        high_test = high[N_train + N_skip:]
+        mask_test = mask_high[N_train + N_skip:]
 
     elif cfg["dataset"] == "reaction_diffusion":
+        import h5py
         high_path = cfg.get("high_path") or "./benchmarks/RD/ReacDiff_Nu5.0_Rho5.0.hdf5"
         with h5py.File(high_path, "r") as f:
             high = f["tensor"][:80, 36:100, :]
@@ -102,10 +110,10 @@ def main():
         mask_high = make_sensor_mask(high, n_sensors=None, sparse_ratio=0.1, seed=cfg["seed"])
         low = dataset_interpolation(high, mask_high, interpol_target="RD", seed=cfg["seed"])
         N_train = 32
-        N_val = 8
-        low_test = low[N_train + N_val:]
-        high_test = high[N_train + N_val:]
-        mask_test = mask_high[N_train + N_val:]
+        N_skip = 8
+        low_test = low[N_train + N_skip:]
+        high_test = high[N_train + N_skip:]
+        mask_test = mask_high[N_train + N_skip:]
 
     elif cfg["dataset"] == "gray":
         high, low = resolve_paths(cfg)
@@ -115,10 +123,10 @@ def main():
         mask_high[:, :, :, :, 0] = True
         mask_high[:, :, :, :, -1] = True
         N_train = 32
-        N_val = 8
-        low_test = low[N_train + N_val:]
-        high_test = high[N_train + N_val:]
-        mask_test = mask_high[N_train + N_val:]
+        N_skip = 8
+        low_test = low[N_train + N_skip:]
+        high_test = high[N_train + N_skip:]
+        mask_test = mask_high[N_train + N_skip:]
 
     elif cfg["dataset"] == "kolmo":
         if getattr(cli, "low_path", None) is None:
@@ -137,14 +145,23 @@ def main():
         high_test = high[test_idx]
         mask_test = mask_high[test_idx]
 
-    else:
-        high, low = resolve_paths(cfg)
-        mask_high = build_masks(cfg, high)
-        n_train = int(low.shape[0] * cfg["train_ratio"])
-        n_val = int(low.shape[0] * cfg["val_ratio"])
-        low_test = low[n_train + n_val:]
-        high_test = high[n_train + n_val:]
-        mask_test = mask_high[n_train + n_val:]
+    elif cfg["dataset"] == "burgers":
+        lf_grid = cfg.get("lf_grid", 16)
+        if lf_grid not in (16, 32):
+            raise ValueError("lf_grid must be 16 or 32.")
+        stride = 128 // lf_grid
+        high = generate_dataset(n_samples=40, nu=0.01, Nx=128, Nt=128, T=1.0, L=1.0, seed=0, warmup_steps=100)
+        low = generate_dataset(n_samples=40, nu=0.1, Nx=lf_grid, Nt=lf_grid, T=1.0, L=1.0, U0=high[:,:,::stride,::stride][:,:,[0], :], seed=20)
+        low = F.interpolate(torch.as_tensor(low, dtype=torch.float32), size=(128, 128), mode="nearest").cpu().numpy()
+        mask_high = make_sensor_mask(high, n_sensors=12, sparse_ratio=None, seed=0, sensor_random=False)
+
+        high_extra = generate_dataset(n_samples=36, nu=0.01, Nx=128, Nt=128, T=1.0, L=1.0, seed=1999, warmup_steps=100)
+        low_extra = generate_dataset(n_samples=36, nu=0.1, Nx=lf_grid, Nt=lf_grid, T=1.0, L=1.0, U0=high_extra[:,:,::stride,::stride][:,:,[0], :], seed=2026)
+        low_extra = F.interpolate(torch.as_tensor(low_extra, dtype=torch.float32), size=(128, 128), mode="nearest").cpu().numpy()
+        mask_extra = make_sensor_mask(high_extra, n_sensors=12, sparse_ratio=None, seed=0, sensor_random=False)
+        low_test = np.concatenate([low[36:], low_extra], axis=0)
+        high_test = np.concatenate([high[36:], high_extra], axis=0)
+        mask_test = np.concatenate([mask_high[36:], mask_extra], axis=0)
 
     if cfg.get("max_test_samples") is not None:
         n_test = min(int(cfg["max_test_samples"]), low_test.shape[0])
@@ -152,10 +169,9 @@ def main():
         high_test = high_test[:n_test]
         mask_test = mask_test[:n_test]
     ds_test = PDEPairDataset(low_data=low_test, high_data=high_test, mask_high_data=mask_test)
-    dl_test = DataLoader(ds_test, batch_size=cfg["val_batch_size"], shuffle=False, drop_last=False)
+    dl_test = DataLoader(ds_test, batch_size=cfg["test_batch_size"], shuffle=False, drop_last=False)
     model = PICSB(
         train_dataloader=dl_test,
-        val_dataloader=None,
         timepoints=cfg["timepoints"],
         time_dim=cfg["time_dim"],
         steps=cfg["steps"],
@@ -190,6 +206,8 @@ def main():
                 print(viz_dir)
                 for b in range(pred.shape[0]):
                     base = f"{cfg['dataset']}_test_{len(preds)-1:03d}_{b:02d}"
+                    if cfg["dataset"] == "kolmo":
+                        base = f"{cfg['dataset']}_fold{int(cfg.get('fold_idx', 0))}_test_{len(preds)-1:03d}_{b:02d}"
                     if cfg["dataset"] == "burgers":
                         save_field_snapshot(
                             x0[b:b+1].cpu(), batch_idx=0, vmin=-0.85, vmax=0.45,
@@ -271,7 +289,7 @@ def main():
         pred_metric,
         gt_metric,
         c=metric_c,
-        batch_size=cfg.get("val_batch_size"),
+        batch_size=cfg.get("test_batch_size"),
     )
     print(f"RMSE: {metric_results['RMSE']['mean']:.4e}")
     print(f"MAE: {metric_results['MAE']['mean']:.4e}")
@@ -280,9 +298,12 @@ def main():
 
     save_dir = Path(cfg["save_dir"])
     save_dir.mkdir(parents=True, exist_ok=True)
-    torch.save(pred_all, save_dir / f"{cfg['dataset']}_pred.pt")
-    torch.save(high_test, save_dir / f"{cfg['dataset']}_high_gt.pt")
-    torch.save(mask_test, save_dir / f"{cfg['dataset']}_mask.pt")
+    result_name = cfg["dataset"]
+    if cfg["dataset"] == "kolmo":
+        result_name = f"{result_name}_fold{int(cfg.get('fold_idx', 0))}"
+    torch.save(pred_all, save_dir / f"{result_name}_pred.pt")
+    torch.save(high_test, save_dir / f"{result_name}_high_gt.pt")
+    torch.save(mask_test, save_dir / f"{result_name}_mask.pt")
     print("Inference done:", pred_all.shape)
 
 if __name__ == "__main__":

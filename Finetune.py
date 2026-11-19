@@ -129,7 +129,7 @@ def prepare_finetune_data(cfg: Dict[str, Any]) -> Dict[str, Tuple[np.ndarray, np
         masks = build_finetune_masks(cfg, high)
         lows = [low for _ in masks]
         highs = [high for _ in masks]
-        return split_by_level_and_concat(lows, highs, masks, cfg["train_ratio"], cfg["val_ratio"])
+        return split_by_level_and_concat(lows, highs, masks, cfg["train_ratio"], cfg.get("val_ratio", cfg["test_skip_ratio"]))
 
     if ds == "darcy":
         a, p = resolve_paths(cfg)
@@ -150,7 +150,7 @@ def prepare_finetune_data(cfg: Dict[str, Any]) -> Dict[str, Tuple[np.ndarray, np
             highs.append(np.concatenate([a, p], axis=1))
             masks_high.append(np.concatenate([mask_p, mask_p], axis=1))
 
-        return split_by_level_and_concat(lows, highs, masks_high, cfg["train_ratio"], cfg["val_ratio"])
+        return split_by_level_and_concat(lows, highs, masks_high, cfg["train_ratio"], cfg.get("val_ratio", cfg["test_skip_ratio"]))
 
     if ds == "kolmo":
         high, low_base = resolve_paths(cfg)
@@ -191,7 +191,7 @@ def prepare_finetune_data(cfg: Dict[str, Any]) -> Dict[str, Tuple[np.ndarray, np
                 highs.append(high)
                 masks_high.append(mask_)
 
-        return split_by_level_and_concat(lows, highs, masks_high, cfg["train_ratio"], cfg["val_ratio"])
+        return split_by_level_and_concat(lows, highs, masks_high, cfg["train_ratio"], cfg.get("val_ratio", cfg["test_skip_ratio"]))
 
     raise ValueError(f"Unsupported dataset {ds}")
 
@@ -216,12 +216,11 @@ def main() -> None:
     set_seed(cfg["seed"])
 
     splits = prepare_finetune_data(cfg)
-    dl_train, dl_val, _ = make_loaders(splits, cfg)
+    dl_train, _ = make_loaders(splits, cfg)
 
     os.makedirs(cfg["save_dir"], exist_ok=True)
     model = PICSB(
         train_dataloader=dl_train,
-        val_dataloader=dl_val,
         timepoints=cfg["timepoints"],
         time_dim=cfg["time_dim"],
         steps=cfg["steps"],

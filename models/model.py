@@ -50,11 +50,9 @@ def _prepare_unet_input(low_data, high_data, mask_high, device):
 
     
 class PICSB(object):
-    def __init__(self, train_dataloader, timepoints, val_dataloader=None, time_dim=32, steps=60, base_lr=1e-3,save=False, beta_min=0.01, beta_max=0.01, pde_type='kolmo', in_channels=40):
+    def __init__(self, train_dataloader, timepoints, time_dim=32, steps=60, base_lr=1e-3,save=False, beta_min=0.01, beta_max=0.01, pde_type='kolmo', in_channels=40):
         self.device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         self.train_dataloader = train_dataloader
-        self.val_dataloader = val_dataloader
-        self.best_val_pde = float("inf")
         self.timepoints = timepoints
         self.steps=steps
         self.base_lr=base_lr
@@ -134,7 +132,7 @@ class PICSB(object):
         return self.beta_min + t * (self.beta_max - self.beta_min)
     
     def train(self, n_iterations=10000, model_name=None, known_alpha=None, refresh=100):
-        self.loss_history={"PDE_loss_fore":[], "Val_PDE_loss":[]}
+        self.loss_history={"PDE_loss_fore":[]}
 
         self.v_fore.train()
         self.time_embed.train() 
@@ -142,7 +140,6 @@ class PICSB(object):
 
         pbar = tqdm(range(n_iterations), desc="Train")
         for iter_idx in pbar:
-            val_pde_mean = None
             try:
                 batch = next(loader_it)
             except StopIteration:
@@ -203,57 +200,10 @@ class PICSB(object):
                 torch.nn.utils.clip_grad_norm_(self.v_fore.parameters(), max_norm=1)
                 torch.nn.utils.clip_grad_norm_(self.time_embed.parameters(), max_norm=1)
             self.optimizer_fore.step()
-            do_val = (iter_idx % 100 == 0) or (iter_idx == n_iterations - 1)
-            if do_val and self.val_dataloader is not None:
-                val_pde_mean = None
-                self.v_fore.eval()
-                self.time_embed.eval()
-                with torch.no_grad():
-                    pde_val = 0.0
-                    cnt = 0
-                    for vb in self.val_dataloader:
-                        vx_0, vx_1, vmask_high = vb
-                        if self.pde_type=='darcy':
-                            va = copy.deepcopy(vx_0[:,0:1])
-                            vx_0 = vx_0[:,1:2]
-                            vx_1 = vx_1[:,1:2]
-                            vmask_high = vmask_high[:,1:2]
-                        vx_1_hat = self.eval_fore(x_0=vx_0, x_1=vx_1, mask_high=vmask_high)
-                        if self.pde_type == "kolmo":
-                            vpde = self.phys_loss(vx_1_hat, coef=known_alpha)
-                        elif self.pde_type == "burgers":
-                            vpde = self.phys_loss(vx_1_hat, coef=known_alpha)
-                        elif self.pde_type == "darcy":
-                            vpde = self.phys_loss(vx_1_hat, coef=va)
-                        elif self.pde_type == "reaction_diffusion":
-                            vpde = self.phys_loss(vx_1_hat, coef=known_alpha)
-                        elif self.pde_type == "gray":
-                            vpde = self.phys_loss(vx_1_hat, coef=known_alpha)
-                        pde_val += float(vpde.detach().cpu().item())
-                        cnt += 1
-                    val_pde_mean = pde_val / max(cnt, 1)
-
-                    if val_pde_mean < self.best_val_pde:
-                        self.best_val_pde = val_pde_mean
-                        models_dict = {
-                            'v_fore': self.v_fore.state_dict(),
-                            'fix_bridge_v_fore': self.fix_bridge_v_fore.state_dict(),
-                            'time_embed': self.time_embed.state_dict(),
-                            'fix_bridge_time_embed': self.fix_bridge_time_embed.state_dict(),
-                            'optimizer_fore': self.optimizer_fore.state_dict(),
-                            'best_val_pde': self.best_val_pde,
-                            'loss_history': self.loss_history                            
-                        }
-                        base, ext = os.path.splitext(model_name)
-                        model_name_val = f"{base}_val{ext}"
-                        torch.save(models_dict, os.path.join(model_name_val))
-                self.loss_history['Val_PDE_loss'].append(val_pde_mean)
-                self.v_fore.train()
-                self.time_embed.train()
             with torch.no_grad():
                 self.loss_history['PDE_loss_fore'].append(np.log1p(epoch_pde_loss_fore.item()))
                 
-            if iter_idx%100==0 and iter_idx!=0:
+            if (iter_idx + 1)%100==0 or iter_idx == n_iterations - 1:
                 torch.cuda.empty_cache()
                 models_dict = {
                     'v_fore': self.v_fore.state_dict(),
@@ -261,13 +211,12 @@ class PICSB(object):
                     'time_embed': self.time_embed.state_dict(),
                     'fix_bridge_time_embed': self.fix_bridge_time_embed.state_dict(),
                     'optimizer_fore': self.optimizer_fore.state_dict(),
-                    'best_val_pde': self.best_val_pde,
                     'loss_history': self.loss_history                            
                 }
                 torch.save(models_dict, os.path.join(model_name))
             pbar.set_description('processed: %d' % (1 + iter_idx))
 
-            pbar.set_postfix({'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy(), 'Val_PDE_loss':val_pde_mean})
+            pbar.set_postfix({'PDE_loss':epoch_pde_loss_fore.detach().cpu().numpy()})
             pbar.update(1)
     
     # For Training           

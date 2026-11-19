@@ -14,11 +14,11 @@ known_alpha:
 iterations: 100000
 refresh: 100
 batch_size: 8
-val_batch_size: 4
+test_batch_size: 4
 shuffle: true
 
 train_ratio: 0.4
-val_ratio: 0.1
+test_skip_ratio: 0.1
 
 high_path: "./benchmarks/RD/ReacDiff_Nu5.0_Rho5.0.hdf5"
 low_path: "./benchmarks/RD/low_f_1d.npy"

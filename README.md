@@ -43,7 +43,7 @@ conda activate PICSB
 python -m pip install -r requirements.txt
 ```
 
-Prepare the benchmark files described in [Datasets](#datasets) before running the scripts. Datasets and pretrained checkpoints are not included.
+Prepare the benchmark files described in [Datasets](#datasets) before running the scripts. Burgers data are generated automatically. Datasets and pretrained checkpoints are not included.
 
 ---
 
@@ -65,18 +65,26 @@ python train_reaction_diffusion.py --config_path config/reaction_diffusion.yaml
 
 # Gray-Scott
 python train_gray.py --config_path config/gray.yaml
+
+# Burgers' Equation (LF 16 or LF 32)
+python train_burgers.py --config_path config/burgers.yaml --lf-grid 16
+python train_burgers.py --config_path config/burgers.yaml --lf-grid 32
 ```
 
-These commands use the 10% sparse observation setting. Checkpoints are saved under `Result/model/`:
+Darcy Flow, Kolmogorov Flow, Reaction-Diffusion, and Gray-Scott use the 10% sparse observation setting. Burgers uses 12 fixed spatial sensors. Checkpoints are saved under `Result/model/`:
 
 | Benchmark | Checkpoint |
 | :--- | :--- |
 | Darcy Flow | `Result/model/darcy.pt` |
-| Kolmogorov Flow | `Result/model/kolmo.pt` |
+| Kolmogorov Flow (fold 0) | `Result/model/kolmo_fold0.pt` |
 | Reaction-Diffusion | `Result/model/RD_100_10_1e7.pt` |
 | Gray-Scott | `Result/model/gray_100_10_1e2_sparse.pt` |
+| Burgers' Equation (LF 16) | `Result/model/burgers_16.pt` |
+| Burgers' Equation (LF 32) | `Result/model/burgers_32.pt` |
 
-For Kolmogorov Flow, `--fold-idx` selects one of five held-out folds (`0` to `4`). Use the same fold for training and inference. When training multiple folds, set a different `--model-name` for each fold to keep their checkpoints.
+For Kolmogorov Flow, `--fold-idx` selects one of five held-out folds (`0` to `4`). Use the same fold for training and inference. The scripts automatically append `_fold{index}` to the checkpoint name; an explicit inference `--model_path` is used as given.
+
+Burgers uses a batch size of 8, `shuffle=False`, 100,000 training iterations, and `refresh=1` by default. Select the LF grid with `--lf-grid 16` or `--lf-grid 32` and use the same grid for inference.
 
 `Finetune.py` provides additional finetuning for Darcy Flow, Kolmogorov Flow, and Burgers' equation. For example, after training Darcy Flow:
 
@@ -87,8 +95,6 @@ python Finetune.py --config_path config/darcy.yaml \
   --save_dir Result/model_finetune \
   --model_name darcy_finetune.pt
 ```
-
-The release includes `config/burgers.yaml`, Burgers data generation, inference, and finetuning support, but does not include a standalone Burgers training script.
 
 ### Inference
 
@@ -107,9 +113,15 @@ python test.py --config_path config/reaction_diffusion.yaml --regime sparse
 
 # Gray-Scott
 python test.py --config_path config/gray.yaml --regime sparse
+
+# Burgers' Equation (LF 16 or LF 32)
+python test.py --config_path config/burgers.yaml --lf-grid 16 \
+  --model_path Result/model/burgers_16.pt
+python test.py --config_path config/burgers.yaml --lf-grid 32 \
+  --model_path Result/model/burgers_32.pt
 ```
 
-By default, each configuration loads the checkpoint listed above. Use `--model_path` to load a different checkpoint, `--save_dir` to change the output directory, and `--viz_dir` to save field visualizations:
+Darcy Flow, Kolmogorov Flow, Reaction-Diffusion, and Gray-Scott load the checkpoints listed above by default. For Burgers, specify `--model_path` as shown above; each command evaluates 40 test samples with a batch size of 4. Use `--model_path` to load a different checkpoint, `--save_dir` to change the output directory, and `--viz_dir` to save field visualizations:
 
 ```bash
 python test.py --config_path config/darcy.yaml \
@@ -118,7 +130,7 @@ python test.py --config_path config/darcy.yaml \
   --viz_dir Result/infer_viz/darcy
 ```
 
-Predictions, ground-truth fields, and observation masks are saved as `{dataset}_pred.pt`, `{dataset}_high_gt.pt`, and `{dataset}_mask.pt`. Visualizations are saved as SVG files when `--viz_dir` is provided.
+Predictions, ground-truth fields, and observation masks are saved as `{dataset}_pred.pt`, `{dataset}_high_gt.pt`, and `{dataset}_mask.pt`. Kolmogorov outputs include the fold index, such as `kolmo_fold0_pred.pt`. Visualizations are saved as SVG files when `--viz_dir` is provided.
 
 ### Log Output
 
@@ -171,7 +183,7 @@ Use `python train_darcy.py --help` or `python test.py --help` for the available 
 * **`models/loss.py`**: Implements the PDE residual losses.
 * **`models/data_generation.py`**, **`models/preprocessing.py`**: Provide observation masks, Burgers data generation, and interpolation.
 * **`datasets/dataset.py`**: Loads low-fidelity fields, high-fidelity fields, and observation masks.
-* **`train_*.py`**: Run training for the four supplied benchmark recipes.
+* **`train_*.py`**: Run training for the five supplied benchmark recipes, including `train_burgers.py` for LF grids of 16 or 32.
 * **`test.py`**: Runs inference, computes metrics, and saves predictions.
 * **`Finetune.py`**: Finetunes a trained model using additional observation sparsities.
 * **`downsample.py`**: Prepares low-fidelity Kolmogorov and Gray-Scott data.
@@ -202,7 +214,7 @@ h5py
 
 ## Datasets
 
-The supplied training scripts cover Darcy Flow, Kolmogorov Flow, Reaction-Diffusion, and Gray-Scott. Download the source data and prepare the following local files.
+The supplied training scripts cover Darcy Flow, Kolmogorov Flow, Reaction-Diffusion, Gray-Scott, and Burgers' equation. Download and prepare the source data for the first four benchmarks as described below. Burgers data are generated by the training and inference scripts.
 
 ### Darcy Flow
 
@@ -264,6 +276,10 @@ The scripts use 32 samples for training and 40 for testing with eight reserved s
 
 ### Burgers' Equation
 
-Burgers data generation is provided in `models/data_generation.py` and configured by `config/burgers.yaml`, following the setup described in [Fourier Neural Operator for Parametric Partial Differential Equations](https://arxiv.org/abs/2010.08895). A standalone Burgers training script and pretrained checkpoint are not included.
+Burgers data generation is provided in `models/data_generation.py` and configured by `config/burgers.yaml`, following the setup described in [DiffusionPDE](https://arxiv.org/abs/2406.17763) and its [Burgers data generation code](https://github.com/jhhuangchloe/DiffusionPDE/tree/main/dataset_generation/burgers). `train_burgers.py` and `test.py` generate the data automatically; no dataset download or separate preprocessing command is required.
+
+HF trajectories use viscosity `0.01` on a `128 x 128` space-time grid. LF trajectories use viscosity `0.1` on a `16 x 16` or `32 x 32` grid selected with `--lf-grid` (default: `16`), then are upsampled to the HF resolution using nearest-neighbor interpolation. The LF simulation starts from the initial HF frame sampled on the LF grid, and the two trajectories evolve independently. HF observations use 12 fixed spatial sensors shared across samples and time steps (`seed=0`), sampled separately from the HF reference.
+
+Training uses the first 32 samples from 40 generated HF/LF pairs (HF seed `0`, LF seed `20`). Testing uses the last four pairs (`36:40`) plus 36 newly generated pairs (HF seed `1999`, LF seed `2026`), for 40 test samples that do not overlap with the training set.
 
 ---

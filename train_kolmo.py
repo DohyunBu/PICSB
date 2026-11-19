@@ -16,9 +16,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--high_path", type=str, default=None)
     parser.add_argument("--low_path", type=str, default=None)
     parser.add_argument("--train-ratio", type=float, default=None)
-    parser.add_argument("--val-ratio", type=float, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--val-batch-size", type=int, default=None)
+    parser.add_argument("--test-batch-size", type=int, default=None)
     parser.add_argument("--timepoints", type=float, nargs="+", default=None)
     parser.add_argument("--time-dim", type=int, default=None)
     parser.add_argument("--steps", type=int, default=None)
@@ -79,12 +78,11 @@ def main() -> None:
     dl_train = DataLoader(ds_train, batch_size=cfg["batch_size"], shuffle=True, drop_last=False)
 
     ds_test = PDEPairDataset(low_data=low_test, high_data=high_test, mask_high_data=mask_test)
-    dl_test = DataLoader(ds_test, batch_size=cfg["val_batch_size"], shuffle=False, drop_last=False)
+    dl_test = DataLoader(ds_test, batch_size=cfg["test_batch_size"], shuffle=False, drop_last=False)
 
     os.makedirs(cfg["save_dir"], exist_ok=True)
     model = PICSB(
         train_dataloader=dl_train,
-        val_dataloader=None,
         timepoints=cfg["timepoints"],
         time_dim=cfg["time_dim"],
         steps=cfg["steps"],
@@ -96,6 +94,9 @@ def main() -> None:
     )
 
     model_path = Path(cfg["save_dir"]) / cfg["model_name"]
+    fold_suffix = f"_fold{fold_idx}"
+    if not model_path.stem.endswith(fold_suffix):
+        model_path = model_path.with_name(f"{model_path.stem}{fold_suffix}{model_path.suffix}")
     model.train(
         n_iterations=cfg["iterations"],
         model_name=str(model_path),

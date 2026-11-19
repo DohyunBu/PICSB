@@ -15,9 +15,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--low_path", type=str, default=None)
     parser.add_argument("--mask_path", type=str, default=None)
     parser.add_argument("--train-ratio", type=float, default=None)
-    parser.add_argument("--val-ratio", type=float, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
-    parser.add_argument("--val-batch-size", type=int, default=None)
+    parser.add_argument("--test-batch-size", type=int, default=None)
     parser.add_argument("--timepoints", type=float, nargs="+", default=None)
     parser.add_argument("--time-dim", type=int, default=None)
     parser.add_argument("--steps", type=int, default=None)
@@ -49,25 +48,24 @@ def main() -> None:
     mask_high = build_masks(cfg, high)
 
     N_train = 32
-    N_val = 8
+    N_skip = 8
 
     low_train = low[:N_train]
     high_train = high[:N_train]
     mask_train = mask_high[:N_train]
 
-    low_test = low[N_train + N_val:]
-    high_test = high[N_train + N_val:]
-    mask_test = mask_high[N_train + N_val:]
+    low_test = low[N_train + N_skip:]
+    high_test = high[N_train + N_skip:]
+    mask_test = mask_high[N_train + N_skip:]
     ds_train = PDEPairDataset(low_data=low_train, high_data=high_train, mask_high_data=mask_train)
     dl_train = DataLoader(ds_train, batch_size=cfg["batch_size"], shuffle=True, drop_last=False)
 
     ds_test = PDEPairDataset(low_data=low_test, high_data=high_test, mask_high_data=mask_test)
-    dl_test = DataLoader(ds_test, batch_size=cfg["val_batch_size"], shuffle=False, drop_last=False)
+    dl_test = DataLoader(ds_test, batch_size=cfg["test_batch_size"], shuffle=False, drop_last=False)
 
     os.makedirs(cfg["save_dir"], exist_ok=True)
     model = PICSB(
         train_dataloader=dl_train,
-        val_dataloader=None,
         timepoints=cfg["timepoints"],
         time_dim=cfg["time_dim"],
         steps=cfg["steps"],

@@ -17,7 +17,7 @@ from datasets.dataset import PDEPairDataset
 DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     "burgers": {
         "batch_size": 8,
-        "val_batch_size": 4,
+        "test_batch_size": 4,
         "in_channels": 1,
         "base_lr": 1e-4,
         "beta_min": 1e-2,
@@ -28,7 +28,7 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "darcy": {
         "batch_size": 8,
-        "val_batch_size": 4,
+        "test_batch_size": 4,
         "in_channels": 1,
         "base_lr": 1e-6,
         "beta_min": 1e-6,
@@ -39,7 +39,7 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "kolmo": {
         "batch_size": 4,
-        "val_batch_size": 4,
+        "test_batch_size": 4,
         "in_channels": 40,
         "base_lr": 1e-3,
         "beta_min": 1e-2,
@@ -50,7 +50,7 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "reaction_diffusion": {
         "batch_size": 8,
-        "val_batch_size": 4,
+        "test_batch_size": 4,
         "in_channels": 1,
         "base_lr": 1e-4,
         "beta_min": 1e-7,
@@ -61,7 +61,7 @@ DATASET_DEFAULTS: Dict[str, Dict[str, Any]] = {
     },
     "gray_scott": {
         "batch_size": 8,
-        "val_batch_size": 4,
+        "test_batch_size": 4,
         "in_channels": 2,
         "base_lr": 1e-4,
         "beta_min": 1e-2,
@@ -113,17 +113,18 @@ def apply_defaults(cfg: Dict[str, Any]) -> Dict[str, Any]:
         "save_dir": "Result/model",
         "model_name": f"{ds}.pt",
         "train_ratio": 0.8,
-        "val_ratio": 0.1,
+        "test_skip_ratio": 0.1,
         "num_workers": 0,
         "mask_keep_ratio": 1.0,
         "darcy_noise_levels": None,
         # burgers generation defaults
         "burgers_high_resol": 0.01,
         "burgers_low_resol": 0.1,
-        "burgers_high_nx": 512,
-        "burgers_high_nt": 512,
-        "burgers_low_nx": 128,
-        "burgers_low_nt": 128,
+        "burgers_high_nx": 128,
+        "burgers_high_nt": 128,
+        "lf_grid": 16,
+        "burgers_low_nx": 16,
+        "burgers_low_nt": 16,
         "burgers_warmup": 100,
         "burgers_seed_high": 0,
         "burgers_seed_low": 0,
@@ -133,10 +134,18 @@ def apply_defaults(cfg: Dict[str, Any]) -> Dict[str, Any]:
     for k, v in {**base, **defaults}.items():
         cfg.setdefault(k, v)
 
+    if ds == "burgers":
+        if cfg["lf_grid"] not in (16, 32):
+            raise ValueError("lf_grid must be 16 or 32.")
+        if cfg["burgers_high_nx"] != 128 or cfg["burgers_high_nt"] != 128:
+            raise ValueError("Burgers HF grid must be 128 x 128.")
+        cfg["burgers_low_nx"] = cfg["lf_grid"]
+        cfg["burgers_low_nt"] = cfg["lf_grid"]
+
     if cfg.get("batch_size") is None:
         cfg["batch_size"] = base["batch_size"]
-    if cfg.get("val_batch_size") is None:
-        cfg["val_batch_size"] = base["val_batch_size"]
+    if cfg.get("test_batch_size") is None:
+        cfg["test_batch_size"] = base["test_batch_size"]
     if cfg.get("base_lr") is None:
         cfg["base_lr"] = base["base_lr"]
     if cfg.get("beta_min") is None:
@@ -190,7 +199,7 @@ def resolve_paths(cfg: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray]:
             seed=cfg["burgers_seed_high"],
             warmup_steps=cfg["burgers_warmup"],
         )
-        high = high[:,:,::4,::4]
+        stride = cfg["burgers_high_nx"] // cfg["lf_grid"]
         low = generate_dataset(
             n_samples=cfg["burgers_samples"],
             nu=cfg["burgers_low_resol"],
@@ -199,9 +208,14 @@ def resolve_paths(cfg: Dict[str, Any]) -> Tuple[np.ndarray, np.ndarray]:
             T=1.0,
             L=1.0,
             seed=cfg["burgers_seed_low"],
-            U0=high[:, :, [0], :],
+            U0=high[:, :, [0], ::stride],
             warmup_steps=cfg["burgers_warmup"],
         )
+        low = torch.nn.functional.interpolate(
+            torch.as_tensor(low, dtype=torch.float32),
+            size=(cfg["burgers_high_nt"], cfg["burgers_high_nx"]),
+            mode="nearest",
+        ).cpu().numpy()
         return high, low
 
     if ds == "darcy":
@@ -309,9 +323,8 @@ def build_masks(
 def make_loaders(
     splits: Dict[str, Tuple[np.ndarray, np.ndarray, np.ndarray]],
     cfg: Dict[str, Any],
-) -> Tuple[DataLoader, DataLoader, DataLoader]:
+) -> Tuple[DataLoader, DataLoader]:
     ds_train = PDEPairDataset(*splits["train"])
-    ds_val = PDEPairDataset(*splits["val"])
     ds_test = PDEPairDataset(*splits["test"])
 
     dl_train = DataLoader(
@@ -322,20 +335,12 @@ def make_loaders(
         num_workers=cfg.get("num_workers", 0),
         pin_memory=torch.cuda.is_available(),
     )
-    dl_val = DataLoader(
-        ds_val,
-        batch_size=cfg["val_batch_size"],
-        shuffle=False,
-        drop_last=False,
-        num_workers=cfg.get("num_workers", 0),
-        pin_memory=torch.cuda.is_available(),
-    )
     dl_test = DataLoader(
         ds_test,
-        batch_size=cfg["val_batch_size"],
+        batch_size=cfg["test_batch_size"],
         shuffle=False,
         drop_last=False,
         num_workers=cfg.get("num_workers", 0),
         pin_memory=torch.cuda.is_available(),
     )
-    return dl_train, dl_val, dl_test
+    return dl_train, dl_test

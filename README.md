@@ -1,6 +1,6 @@
 # Sparsely-Supervised Data Assimilation via Physics-Informed Schrödinger Bridge
 
-This repository provides the implementation of the paper **"[Sparsely-Supervised Data Assimilation via Physics-Informed Schrödinger Bridge](https://arxiv.org/abs/2603.22319)"**.
+This repository provides the implementation of the paper **"[Sparsely-Supervised Data Assimilation via Physics-Informed Schrödinger Bridge](https://openreview.net/forum?id=6WETopIg2t#discussion)"**.
 
 <p align="center">
   <a href="./img/PICSB_POSTER.pdf">
